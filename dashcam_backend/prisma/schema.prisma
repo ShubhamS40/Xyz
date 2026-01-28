@@ -1,0 +1,218 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id              Int                   @id @default(autoincrement())
+  email           String                @unique
+  passwordHash    String                @map("password_hash")
+  isActive        Boolean               @default(true) @map("is_active")
+  emailVerified   Boolean               @default(false) @map("email_verified")
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+  loginOtp        AdminLoginOtp?
+  registrationOtp AdminRegistrationOtp?
+
+  @@map("admins")
+}
+
+model AdminLoginOtp {
+  id        Int      @id @default(autoincrement())
+  adminId   Int      @unique @map("admin_id")
+  otpCode   String   @map("otp_code")
+  expiresAt DateTime @map("expires_at")
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  admin     Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@map("admin_login_otps")
+}
+
+model AdminRegistrationOtp {
+  id        Int      @id @default(autoincrement())
+  adminId   Int      @unique @map("admin_id")
+  otpCode   String   @map("otp_code")
+  expiresAt DateTime @map("expires_at")
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  admin     Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@map("admin_registration_otps")
+}
+
+model DeviceInventory {
+  id              Int       @id @default(autoincrement())
+  deviceModel     String    @map("device_model")
+  imei            String    @unique
+  status          String    @default("unassigned")
+  vendor          String?   @map("vendor_name")
+  category        String    @map("device_category")
+  unitPrice       Float?    @map("unit_price")
+  companyName     String?   @map("company_name")
+  assignedToType  String?   @map("assigned_to_type")
+  assignedToId    Int?      @map("assigned_to_id")
+  assignedToName  String?   @map("assigned_to_name")
+  activationDate  DateTime? @map("activation_date")
+  cameraChannels   Int?      @map("camera_channels")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([deviceModel])
+  @@index([status])
+  @@index([category])
+  @@map("device_inventory")
+}
+
+model Device {
+  id              Int            @id @default(autoincrement())
+  imei            String         @unique
+  deviceName      String?        @map("device_name")
+  deviceModel     String         @default("JC261") @map("device_model")
+  status          String         @default("inactive")
+  category        String         @default("Other") @map("device_category")
+  vendor          String?        @map("vendor_name")
+  unitPrice       Float?         @map("unit_price")
+  companyName     String?        @map("company_name")
+  assignedToType  String?        @map("assigned_to_type")
+  assignedToId    Int?           @map("assigned_to_id")
+  assignedToName  String?        @map("assigned_to_name")
+  activationDate  DateTime?      @map("activation_date")
+  lastSeen        DateTime?      @map("last_seen")
+  ipAddress       String?        @map("ip_address")
+  serverIp        String?        @map("server_ip")
+  serverPort      Int?           @map("server_port")
+  
+  // ✅ NEW FIELDS from images
+  simNumber       String?        @map("sim_number")
+  phoneNumber     String?        @map("phone_number")
+  driverName      String?        @map("driver_name")
+  numberPlate     String?        @map("number_plate")
+  cameraChannels   Int?           @map("camera_channels")
+  
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  data            DeviceData[]
+  logs            DeviceLog[]
+  trackHistory    TrackHistory[]
+
+  @@index([deviceModel])
+  @@index([status])
+  @@index([category])
+  @@index([assignedToType])
+  @@index([assignedToId])
+  @@index([simNumber])
+  @@index([phoneNumber])
+  @@map("devices")
+}
+
+model DeviceLog {
+  id        Int      @id @default(autoincrement())
+  deviceId  Int      @map("device_id")
+  eventType String   @map("event_type")
+  ipAddress String?  @map("ip_address")
+  timestamp DateTime @default(now())
+  details   String?  @db.Text
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@map("device_logs")
+}
+
+model DeviceData {
+  id             Int      @id @default(autoincrement())
+  deviceId       Int      @map("device_id")
+  
+  // ✅ EXISTING FIELDS
+  latitude       Float?
+  longitude      Float?
+  speed          Float?
+  accStatus      Int?     @map("acc_status")
+  gnssType       String?  @map("gnss_type")
+  satellites     Int?     @default(0)
+  signalStrength String?  @map("signal_strength")
+  receivedAt     DateTime @default(now()) @map("received_at")
+  
+  // ✅ NEW FIELDS from images
+  ignition       Boolean? @default(false)              // Ignition status
+  positionTime   DateTime? @map("position_time")       // Position Time
+  azimuth        Float?                                // Azimuth (direction/heading)
+  positionType   String?  @map("position_type")        // Position type (GPS/LBS/WIFI)
+  dataType       String?  @map("data_type")            // Data Type
+  coordinates    String?                               // Combined lat,lng string
+  address        String?  @db.Text                     // Reverse geocoded address
+  
+  device         Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([receivedAt])
+  @@index([positionTime])
+  @@map("device_data")
+}
+
+model TrackHistory {
+  id            Int      @id @default(autoincrement())
+  deviceId      Int      @map("device_id")
+  imei          String
+  startTime     DateTime @map("start_time")
+  endTime       DateTime @map("end_time")
+  totalDistance Float    @map("total_distance_km")
+  avgSpeed      Float    @map("avg_speed_kmh")
+  maxSpeed      Float?   @map("max_speed_kmh")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  device        Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([startTime, endTime])
+  @@map("track_history")
+}
+
+model User {
+  id              Int                   @id @default(autoincrement())
+  companyName     String?               @map("company_name")
+  email           String                @unique
+  companyType     String                @map("company_type")
+  passwordHash    String                @map("password_hash")
+  isActive        Boolean               @default(true) @map("is_active")
+  emailVerified   Boolean               @default(false) @map("email_verified")
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+  loginOtp        UserLoginOtp?
+  registrationOtp UserRegistrationOtp?
+
+  @@map("users")
+}
+
+model UserLoginOtp {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique @map("user_id")
+  otpCode   String   @map("otp_code")
+  expiresAt DateTime @map("expires_at")
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_login_otps")
+}
+
+model UserRegistrationOtp {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique @map("user_id")
+  otpCode   String   @map("otp_code")
+  expiresAt DateTime @map("expires_at")
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_registration_otps")
+}

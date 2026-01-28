@@ -1,0 +1,113 @@
+###############################################
+# Global settings -> General
+###############################################
+
+logLevel: info
+logDestinations: [stdout]
+logFile: mediamtx.log
+
+readTimeout: 20s
+writeTimeout: 20s
+writeQueueSize: 1024
+udpMaxPayloadSize: 1472
+
+runOnConnect:
+runOnConnectRestart: no
+runOnDisconnect:
+
+###############################################
+# Authentication
+###############################################
+
+authMethod: internal
+
+authInternalUsers:
+- user: any
+  pass:
+  ips: []
+  permissions:
+  - action: publish
+  - action: read
+  - action: playback
+
+- user: any
+  pass:
+  ips: ['127.0.0.1', '::1']
+  permissions:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+###############################################
+# RTSP
+###############################################
+
+rtsp: yes
+protocols: [udp, tcp]
+encryption: "no"
+rtspAddress: :8554
+
+###############################################
+# RTMP
+###############################################
+
+rtmp: yes
+rtmpAddress: :1935
+rtmpEncryption: "no"
+
+###############################################
+# 🔥 HLS (FIXED FOR iOS)
+###############################################
+
+hls: yes
+hlsAddress: :8888
+hlsEncryption: no
+hlsAllowOrigin: '*'
+
+# IMPORTANT FIXES 👇
+hlsAlwaysRemux: yes
+hlsVariant: mpegts     # 🔥 iOS SAFE (NO lowLatency)
+
+hlsSegmentCount: 7
+hlsSegmentDuration: 6s   # stable segments
+hlsPartDuration: 1s      # NO fluctuation
+
+hlsSegmentMaxSize: 50M
+hlsDirectory: ''
+hlsMuxerCloseAfter: 120s
+
+###############################################
+# WebRTC (unchanged)
+###############################################
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcAllowOrigin: '*'
+webrtcLocalUDPAddress: :8189
+webrtcHandshakeTimeout: 10s
+webrtcTrackGatherTimeout: 2s
+
+###############################################
+# SRT
+###############################################
+
+srt: yes
+srtAddress: :8890
+
+###############################################
+# Path defaults
+###############################################
+
+pathDefaults:
+  source: publisher
+  sourceOnDemand: no
+  maxReaders: 0
+  overridePublisher: yes
+
+###############################################
+# Paths
+###############################################
+
+paths:
+  all_others:
