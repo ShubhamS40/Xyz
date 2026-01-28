@@ -12,8 +12,9 @@ class TCPServer {
     this.deviceProtocols = new Map(); // Map IMEI to protocol handler
     this.crcMethod = null;
     this.calculateCRC = null;
-    // Track last status update time per device to throttle updates
     this.lastStatusUpdates = new Map();
+    /** IMEIs we've already auto-sent RSERVICE+RTMP this process (avoid duplicate on reconnect) */
+    this.autoStartedRTMP = new Set();
     
     // Test and initialize CRC method (this will also initialize protocol handlers)
     this.initializeCRC();
@@ -433,17 +434,31 @@ class TCPServer {
               }
             }
 
-            const packetLength = buffer[2];
-            
-            // Validate packet length
-            if (packetLength < 3 || packetLength > 200) {
-              console.log(`❌ Invalid packet length: ${packetLength}, discarding...`);
-              buffer = buffer.slice(1);
-              continue;
+            // 79 79 uses 2-byte length (JT/T 808 style); 78 78 uses 1-byte length
+            let packetLength;
+            let totalPacketSize;
+            if (buffer[0] === 0x79 && buffer[1] === 0x79 && buffer.length >= 4) {
+              packetLength = buffer.readUInt16BE(2);
+              totalPacketSize = 2 + 2 + packetLength + 2 + 2; // Start(2) + Len(2) + Data + CRC(2) + 0D0A(2)
+              if (packetLength < 1 || packetLength > 500) {
+                console.log(`⚠️ 79 79 packet: 2-byte length ${packetLength} out of range, skipping 4 bytes`);
+                buffer = buffer.slice(4);
+                continue;
+              }
+            } else {
+              packetLength = buffer[2];
+              totalPacketSize = 2 + 1 + packetLength + 2; // 78 78: Start(2) + Length(1) + Data + Stop(2)
+              if (packetLength < 3 || packetLength > 200) {
+                if (buffer[0] === 0x79 && buffer[1] === 0x79) {
+                  console.log(`⚠️ 79 79 packet: 1-byte length ${packetLength} invalid (try 2-byte?); skipping 4 bytes`);
+                  buffer = buffer.length >= 4 ? buffer.slice(4) : buffer.slice(2);
+                } else {
+                  console.log(`❌ Invalid packet length: ${packetLength}, discarding...`);
+                  buffer = buffer.slice(1);
+                }
+                continue;
+              }
             }
-            
-            // Total packet size: Start(2) + Length(1) + Data(packetLength) + Stop(2) = 5 + packetLength
-            const totalPacketSize = 2 + 1 + packetLength + 2;
 
             if (buffer.length < totalPacketSize) {
               // Wait for more data
@@ -525,6 +540,33 @@ class TCPServer {
                   }
                 } catch (error) {
                   console.error(`❌ Error handling device registration:`, error.message);
+                }
+              }
+
+              // RSERVICE + RTMP: JC261 = 0x80, PL601 = plain text (phone-style). Both can stream.
+              if (deviceModelType === 'JC261' || deviceModelType === 'PL601') {
+                const auto = process.env.AUTO_START_RTMP_ON_CONNECT === 'true';
+                console.log('');
+                console.log('📡 RSERVICE+RTMP: Video → Live or POST /api/devices/' + deviceIMEI + '/start-rtmp');
+                if (deviceModelType === 'PL601') {
+                  console.log('   PL601: plain-text RSERVICE + RTMP (no 0x80) — same as phone.');
+                } else {
+                  console.log('   JC261: 0x80 TCP only (no SMS).');
+                }
+                console.log('   Auto-send on connect: ' + (auto ? 'ON' : 'OFF'));
+                console.log('');
+                if (auto && !this.autoStartedRTMP.has(deviceIMEI)) {
+                  this.autoStartedRTMP.add(deviceIMEI);
+                  const how = deviceModelType === 'PL601' ? 'plain-text' : '0x80';
+                  console.log('🔄 AUTO_START_RTMP: Sending RSERVICE + RTMP (' + how + ') for ' + deviceIMEI + ' in 2.5s...');
+                  const imei = deviceIMEI;
+                  setTimeout(() => {
+                    this.startRTMPStream(imei, null, 0, 15).then(() => {
+                      console.log('✅ AUTO_START_RTMP: RSERVICE + RTMP sent for ' + imei);
+                    }).catch((e) => {
+                      console.error('❌ AUTO_START_RTMP failed for ' + imei + ':', e && e.message ? e.message : e);
+                    });
+                  }, 2500);
                 }
               }
             } else if (parsedData && parsedData.imei && !deviceIMEI) {
@@ -768,35 +810,31 @@ class TCPServer {
   /**
    * Start RTMP streaming for a device
    */
-  async startRTMPStream(imei, rtmpUrl = null, cameraIndex = 0) {
+  async startRTMPStream(imei, rtmpUrl = null, cameraIndex = 0, durationMinutes = 15) {
     try {
-      // First check if device is connected
       if (!this.activeConnections || !this.activeConnections.has(imei)) {
         console.error(`❌ Device ${imei} not in active connections`);
         console.log(`📋 Active connections: ${Array.from(this.activeConnections?.keys() || []).join(', ')}`);
         return false;
       }
 
-    const handler = await this.getProtocolHandler(imei);
+      const handler = await this.getProtocolHandler(imei);
       const deviceModel = handler.getDeviceModel();
       
       console.log(`🔍 Device ${imei} handler: ${deviceModel}`);
       console.log(`📋 Cached protocols: ${Array.from(this.deviceProtocols.keys()).map(k => `${k}=${this.deviceProtocols.get(k)?.getDeviceModel?.() || 'unknown'}`).join(', ')}`);
       
-    // Only JC261 supports RTMP streaming
       if (deviceModel === 'JC261') {
-        const result = handler.startRTMPStream(imei, rtmpUrl, cameraIndex, this.activeConnections);
+        const result = handler.startRTMPStream(imei, rtmpUrl, cameraIndex, durationMinutes, this.activeConnections);
         console.log(`📤 RTMP start command result for ${imei}: ${result}`);
         return result;
-    } else {
-        console.error(`❌ RTMP streaming not supported for ${deviceModel} devices`);
-        // Force use JC261 handler if device model is unknown but device is connected
-        // OR if handler was mis-detected as PL601 but device is actually JC261
-        console.log(`⚠️  Attempting to use JC261 handler anyway for ${imei} (device is connected)`);
-        // Override the cached handler to JC261
-        this.deviceProtocols.set(imei, this.jc261Handler);
-        return this.jc261Handler.startRTMPStream(imei, rtmpUrl, cameraIndex, this.activeConnections);
       }
+      if (deviceModel === 'PL601') {
+        console.log(`📤 PL601: plain-text RSERVICE + RTMP (no 0x80) — same as phone`);
+        return handler.startRTMPStream(imei, rtmpUrl, cameraIndex, durationMinutes, this.activeConnections);
+      }
+      console.log(`⚠️  ${deviceModel}: using JC261-style 0x80 RSERVICE + RTMP for ${imei}`);
+      return this.jc261Handler.startRTMPStream(imei, rtmpUrl, cameraIndex, durationMinutes, this.activeConnections);
     } catch (error) {
       console.error(`❌ Error in startRTMPStream for ${imei}:`, error);
       return false;
@@ -804,18 +842,16 @@ class TCPServer {
   }
 
   /**
-   * Stop RTMP streaming for a device
+   * Stop RTMP streaming for a device.
+   * JC261 = 0x80 RTMP,OFF#; PL601 = plain-text RTMP,OFF#.
    */
   async stopRTMPStream(imei) {
     const handler = await this.getProtocolHandler(imei);
-    
-    // Only JC261 supports RTMP streaming
-    if (handler.getDeviceModel() === 'JC261') {
+    const model = handler.getDeviceModel();
+    if (model === 'JC261' || model === 'PL601') {
       return handler.stopRTMPStream(imei, this.activeConnections);
-    } else {
-      console.error(`❌ RTMP streaming not supported for ${handler.getDeviceModel()} devices`);
-      return false;
     }
+    return this.jc261Handler.stopRTMPStream(imei, this.activeConnections);
   }
 
   /**

@@ -690,9 +690,15 @@ class JC261Protocol {
   }
 
   /**
-   * Start RTMP streaming for JC261 device using 0x80 packet and text fallback
+   * Start RTMP streaming for JC261 device using 0x80 packet (no SMS).
+   * Per JC261 Command List & Jimi protocol 5.8:
+   * - COREKITSW,0# first (integrated mode) — required before RSERVICE/RTMP on some firmware.
+   * - RSERVICE,<url># sets RTMP push URL; format rtmp://host:port/live/{channel}/{imei} (protocol 5.8).
+   * - RTMP,ON,<IN|OUT|INOUT>,<2–180># starts live stream.
+   * @param {number} durationMinutes - 2–180; default 15.
+   * @returns {Promise<boolean>}
    */
-  startRTMPStream(imei, rtmpUrl = null, cameraIndex = 0, activeConnections) {
+  startRTMPStream(imei, rtmpUrl = null, cameraIndex = 0, durationMinutes = 15, activeConnections) {
     console.log(`🔍 JC261 startRTMPStream called for IMEI: ${imei}`);
     console.log(`📋 Active connections IMEIs: ${Array.from(activeConnections.keys()).join(', ')}`);
     
@@ -700,53 +706,96 @@ class JC261Protocol {
     if (!socket) {
       console.error(`❌ JC261 Device ${imei} not connected - socket not found`);
       console.log(`📋 Available IMEIs: ${Array.from(activeConnections.keys()).join(', ')}`);
-      return false;
+      return Promise.resolve(false);
     }
     
     console.log(`✅ Socket found for ${imei}, socket writable: ${socket.writable}`);
 
-    try {
-      console.log(`🎥 JC261: Starting RTMP stream for device ${imei}, camera channel ${cameraIndex}...`);
-      
-      // Use public RTMP host/port for device to reach server (bore.pub tunnel)
-      const publicRtmpHost = process.env.RTMP_PUBLIC_HOST || 'bore.pub';
-      const publicRtmpPort = process.env.RTMP_PUBLIC_PORT || '22797';
-      
-      // MediaMTX path format: live/{cameraIndex}/{imei}
-      // Camera index: 0 = CH1, 1 = CH2, etc.
-      // Some JC261 devices need full path, some just need /live# and add path themselves
-      const rtmpServiceUrl = rtmpUrl || `rtmp://${publicRtmpHost}:${publicRtmpPort}/live/${cameraIndex}/${imei}#`;
-      
-      console.log(`📡 JC261 RTMP URL (for device): ${rtmpServiceUrl}`);
-      console.log(`   Using public tunnel: ${publicRtmpHost}:${publicRtmpPort}`);
-      
-      // Send RSERVICE command via 0x80 packet to configure RTMP service URL
-      const rserviceCommand = `RSERVICE,${rtmpServiceUrl}`;
-      console.log(`📤 JC261 Sending RSERVICE command via 0x80 packet: ${rserviceCommand}`);
-      this.send0x80Command(imei, rserviceCommand, 0x0001, activeConnections);
-
-      // Fallback: also send plain text (some firmwares accept text only)
-      this.sendTextCommand(imei, rserviceCommand, activeConnections);
-      
-      // Wait before sending RTMP ON command
-      setTimeout(() => {
-        // RTMP command format: RTMP,ON,INOUT,duration#
-        // INOUT = bidirectional, duration = seconds (30 = unlimited)
-        const rtmpCommand = `RTMP,ON,INOUT,30#`;
-        console.log(`📤 JC261 Sending RTMP command via 0x80 packet: ${rtmpCommand}`);
-        this.send0x80Command(imei, rtmpCommand, 0x0002, activeConnections);
-
-        // Fallback text
-        this.sendTextCommand(imei, rtmpCommand, activeConnections);
+    return new Promise((resolve) => {
+      try {
+        console.log(`🎥 JC261: Starting RTMP stream for device ${imei}, camera ${cameraIndex}, duration ${durationMinutes} min...`);
         
-        console.log(`✅ JC261 Video commands sent via 0x80 TCP packets (no SMS required)`);
-      }, 1000);
-      
-      return true;
-    } catch (error) {
-      console.error(`❌ JC261 Error starting RTMP stream for ${imei}:`, error.message);
-      return false;
-    }
+        const publicRtmpHost = process.env.RTMP_PUBLIC_HOST || 'bore.pub';
+        const publicRtmpPort = process.env.RTMP_PUBLIC_PORT || '22797';
+        const noRtmpPrefix = process.env.RSERVICE_NO_RTMP_PREFIX === '1';
+        // URL must NOT contain # — # is only the command terminator. Protocol 5.8: rtmp://host:port/live/{channel}/{imei}
+        let rtmpBaseUrl = rtmpUrl || (noRtmpPrefix
+          ? `${publicRtmpHost}:${publicRtmpPort}/live/${cameraIndex}/${imei}`
+          : `rtmp://${publicRtmpHost}:${publicRtmpPort}/live/${cameraIndex}/${imei}`);
+        if (typeof rtmpBaseUrl === 'string' && rtmpBaseUrl.endsWith('#')) rtmpBaseUrl = rtmpBaseUrl.slice(0, -1);
+        const rserviceCommand = `RSERVICE,${rtmpBaseUrl}#`;
+        
+        console.log(`📡 JC261 RTMP URL (for device): ${rtmpBaseUrl}`);
+        
+        const sendPlain = () => {
+          if (process.env.RTMP_ALSO_PLAIN_TEXT !== '1') return;
+          const s = activeConnections.get(imei);
+          if (s && s.writable) return s;
+          return null;
+        };
+
+        let step = 0;
+        const run = () => {
+          step++;
+          if (step === 1) {
+            // 1) COREKITSW,0# — integrated mode (JC261 Command List / openfms). Skip if env COREKITSW_BEFORE_RSERVICE=0.
+            if (process.env.COREKITSW_BEFORE_RSERVICE !== '0') {
+              const coreCmd = 'COREKITSW,0#';
+              this.send0x80Command(imei, coreCmd, 0x0000, activeConnections);
+              const ps = sendPlain();
+              if (ps) { ps.write(Buffer.from(coreCmd + '\r\n', 'utf8')); console.log('📤 (RTMP_ALSO_PLAIN_TEXT) Plain COREKITSW,0 sent'); }
+              console.log('📤 COREKITSW,0# sent (0x80) — integrated mode');
+              setTimeout(run, 500);
+              return;
+            }
+            step = 2;
+          }
+          if (step === 2) {
+            // 2) RSERVICE,<url>#
+            this.send0x80Command(imei, rserviceCommand, 0x0001, activeConnections);
+            const ps = sendPlain();
+            if (ps) { ps.write(Buffer.from(rserviceCommand + '\r\n', 'utf8')); console.log('📤 (RTMP_ALSO_PLAIN_TEXT) Plain RSERVICE sent'); }
+            console.log('');
+            console.log('======================================================================');
+            console.log('📤 RSERVICE COMMAND SENT (0x80 TCP, NO SMS)');
+            console.log('   IMEI:', imei, '| Command:', rserviceCommand);
+            console.log('======================================================================');
+            console.log('');
+            setTimeout(run, 1000);
+            return;
+          }
+          // 3) RTMP,ON,<camera>,<dur>#
+          const dur = Math.max(2, Math.min(180, Number(durationMinutes) || 15));
+          const cameraMode = cameraIndex === 0 ? 'OUT' : (cameraIndex === 1 ? 'IN' : 'INOUT');
+          const rtmpCommand = `RTMP,ON,${cameraMode},${dur}#`;
+          try {
+            this.send0x80Command(imei, rtmpCommand, 0x0002, activeConnections);
+            const ps = sendPlain();
+            if (ps) { ps.write(Buffer.from(rtmpCommand + '\r\n', 'utf8')); console.log('📤 (RTMP_ALSO_PLAIN_TEXT) Plain RTMP,ON sent'); }
+            console.log('');
+            console.log('======================================================================');
+            console.log(`📤 RTMP STREAM COMMAND SENT (${dur} MIN) (0x80 TCP, NO SMS)`);
+            console.log('   IMEI:', imei, '| Command:', rtmpCommand, '| Camera:', cameraMode);
+            console.log('======================================================================');
+            console.log('');
+            resolve(true);
+          } catch (e) {
+            console.error(`❌ JC261 Error sending RTMP,ON for ${imei}:`, e && e.message ? e.message : e);
+            resolve(false);
+          }
+        };
+
+        if (process.env.COREKITSW_BEFORE_RSERVICE === '0') {
+          step = 1;
+          run();
+        } else {
+          run();
+        }
+      } catch (error) {
+        console.error(`❌ JC261 Error starting RTMP stream for ${imei}:`, error.message);
+        resolve(false);
+      }
+    });
   }
 
   /**
@@ -761,8 +810,11 @@ class JC261Protocol {
 
     try {
       const stopCommand = `RTMP,OFF#`;
-      console.log(`📤 JC261 Sending RTMP OFF command via 0x80 packet: ${stopCommand}`);
       this.send0x80Command(imei, stopCommand, 0x0003, activeConnections);
+      console.log('');
+      console.log('========== RTMP STREAM STOP COMMAND SENT (0x80 TCP, NO SMS) ==========');
+      console.log(`   IMEI: ${imei} | Command: ${stopCommand}`);
+      console.log('');
       return true;
     } catch (error) {
       console.error(`❌ JC261 Error stopping RTMP stream for ${imei}:`, error.message);

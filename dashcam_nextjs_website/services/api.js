@@ -498,8 +498,8 @@ class ApiService {
     return data;
   }
 
-  // Start video stream for device
-  async startVideoStream(imei, cameraIndex = 0) {
+  // Start video stream for device. durationMinutes: 2–180 (default 15); use 180 for "not limited".
+  async startVideoStream(imei, cameraIndex = 0, durationMinutes = 15) {
     const token = localStorage.getItem('userToken');
     if (!token) {
       throw new Error('User not authenticated');
@@ -511,7 +511,7 @@ class ApiService {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
-      body: JSON.stringify({ cameraIndex }),
+      body: JSON.stringify({ cameraIndex, durationMinutes }),
     });
 
     const data = await response.json();

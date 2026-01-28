@@ -2,19 +2,18 @@ import React, { useState } from 'react';
 import { Heart, Camera, Edit, RefreshCw, MoreVertical, ChevronDown, Search } from 'lucide-react';
 import apiService from '@/services/api';
 
-const DeviceList = ({ devices = [], loading = false, onChannelSelect }) => {
+const DURATION_MINUTES = { 'not limited': 180, '30 min': 30, '1 hour': 60, '2 hours': 120 };
+
+const DeviceList = ({ devices = [], loading = false, broadcastDuration = 'not limited', onChannelSelect, onChannelDeselect }) => {
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [channels, setChannels] = useState({});
 
-  // Initialize channels state for devices based on cameraChannels field
   React.useEffect(() => {
     const channelsState = {};
     devices.forEach(device => {
-      // Use cameraChannels from device, default to 2 if not set
       const numChannels = device.cameraChannels || 2;
       channelsState[device.id] = {};
-      // Only create channels up to the number of camera channels
       for (let i = 1; i <= numChannels; i++) {
         channelsState[device.id][`ch${i}`] = false;
       }
@@ -29,7 +28,6 @@ const DeviceList = ({ devices = [], loading = false, onChannelSelect }) => {
   const handleChannelChange = async (deviceId, channel, device) => {
     const newState = !channels[deviceId][channel];
     
-    // Update local state
     setChannels(prev => ({
       ...prev,
       [deviceId]: {
@@ -38,16 +36,14 @@ const DeviceList = ({ devices = [], loading = false, onChannelSelect }) => {
       }
     }));
 
-    // If channel is being selected, start video stream
     if (newState && device && device.imei) {
-      const channelNumber = parseInt(channel.replace('ch', ''));
-      const cameraIndex = channelNumber - 1; // CH1 = index 0, CH2 = index 1, etc.
+      const channelNumber = parseInt(channel.replace('ch', ''), 10);
+      const cameraIndex = channelNumber - 1;
+      const durationMinutes = DURATION_MINUTES[broadcastDuration] ?? 15;
       
       try {
-        console.log(`Starting video stream for ${device.imei}, channel ${channelNumber} (camera index ${cameraIndex})`);
-        
-        // Call API to start video stream
-        const response = await apiService.startVideoStream(device.imei, cameraIndex);
+        console.log(`Starting video stream for ${device.imei}, channel ${channelNumber}, duration ${durationMinutes} min`);
+        const response = await apiService.startVideoStream(device.imei, cameraIndex, durationMinutes);
         
         if (response.success && onChannelSelect) {
           onChannelSelect({
@@ -60,19 +56,22 @@ const DeviceList = ({ devices = [], loading = false, onChannelSelect }) => {
         }
       } catch (error) {
         console.error('Error starting video stream:', error);
-        // Revert channel selection on error
         setChannels(prev => ({
           ...prev,
-          [deviceId]: {
-            ...prev[deviceId],
-            [channel]: false
-          }
+          [deviceId]: { ...prev[deviceId], [channel]: false }
         }));
       }
     } else if (!newState && device && device.imei) {
-      // If channel is being deselected, stop video stream
       try {
         await apiService.stopVideoStream(device.imei);
+        if (onChannelDeselect) onChannelDeselect(device.imei);
+        setChannels(prev => {
+          const next = { ...prev };
+          if (next[deviceId]) {
+            next[deviceId] = Object.fromEntries(Object.keys(next[deviceId]).map(k => [k, false]));
+          }
+          return next;
+        });
       } catch (error) {
         console.error('Error stopping video stream:', error);
       }

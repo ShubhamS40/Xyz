@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Info, Grid3x3, LayoutGrid, Maximize2, Settings } from 'lucide-react';
 
-const LiveViewPlayer = ({ streams = [] }) => {
+const LOADING_TIMEOUT_MS = 20000;
+
+const LiveViewPlayer = ({ streams = [], broadcastDuration = 'not limited', onBroadcastDurationChange }) => {
   const [compatibility, setCompatibility] = useState(true);
-  const [broadcastDuration, setBroadcastDuration] = useState('not limited');
   const [viewMode, setViewMode] = useState('2x2');
   const videoRefs = useRef({});
   const hlsInstancesRef = useRef({});
@@ -11,6 +12,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
   const playPromisesRef = useRef({});
   const [hlsLoaded, setHlsLoaded] = useState(false);
   const [streamStatus, setStreamStatus] = useState({});
+  const loadingTimeoutsRef = useRef({});
 
   const activeStreams = streams.length > 0 ? streams : [];
 
@@ -146,6 +148,24 @@ const LiveViewPlayer = ({ streams = [] }) => {
         
         setStreamStatus(prev => ({ ...prev, [videoId]: 'loading' }));
 
+        if (loadingTimeoutsRef.current[videoId]) {
+          clearTimeout(loadingTimeoutsRef.current[videoId]);
+        }
+        loadingTimeoutsRef.current[videoId] = setTimeout(() => {
+          setStreamStatus(prev => {
+            if (prev[videoId] !== 'loading') return prev;
+            return { ...prev, [videoId]: 'error' };
+          });
+          delete loadingTimeoutsRef.current[videoId];
+        }, LOADING_TIMEOUT_MS);
+
+        const clearLoadingTimeout = () => {
+          if (loadingTimeoutsRef.current[videoId]) {
+            clearTimeout(loadingTimeoutsRef.current[videoId]);
+            delete loadingTimeoutsRef.current[videoId];
+          }
+        };
+
         const hls = new window.Hls({
           enableWorker: true,
           lowLatencyMode: true,
@@ -170,6 +190,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
             hls.loadSource(stream.hlsUrl);
           } catch (e) {
             console.error(`❌ Failed to load HLS source for ${videoId}:`, e);
+            clearLoadingTimeout();
             setStreamStatus(prev => ({ ...prev, [videoId]: 'error' }));
           }
         });
@@ -192,6 +213,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
               if (videoElement.readyState >= 2) {
                 const playPromise = videoElement.play().then(() => {
                   console.log(`▶️ Video playing for ${videoId}`);
+                  clearLoadingTimeout();
                   setStreamStatus(prev => ({ ...prev, [videoId]: 'playing' }));
                   if (playPromisesRef.current[videoId] === playPromise) {
                     delete playPromisesRef.current[videoId];
@@ -199,6 +221,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
                 }).catch(err => {
                   if (err.name !== 'AbortError') {
                     console.error('❌ Error playing video after manifest parsed:', err);
+                    clearLoadingTimeout();
                     setStreamStatus(prev => ({ ...prev, [videoId]: 'error' }));
                   } else {
                     console.log(`⏭️ Play aborted for ${videoId} (expected during re-initialization)`);
@@ -222,16 +245,16 @@ const LiveViewPlayer = ({ streams = [] }) => {
           }, 100);
         });
 
-        // Mark "playing" when at least one fragment is buffered
         hls.on(window.Hls.Events.FRAG_BUFFERED, () => {
           if (hlsInstancesRef.current[videoId] === hls) {
+            clearLoadingTimeout();
             setStreamStatus(prev => ({ ...prev, [videoId]: 'playing' }));
           }
         });
 
-        // Fallback: if currentTime starts moving, consider it playing
         const timeUpdateHandler = () => {
           if (videoElement.currentTime > 0 && !videoElement.paused) {
+            clearLoadingTimeout();
             setStreamStatus(prev => ({ ...prev, [videoId]: 'playing' }));
           }
         };
@@ -239,6 +262,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
 
         const playingHandler = () => {
           console.log(`▶️ Video started playing for ${videoId}`);
+          clearLoadingTimeout();
           setStreamStatus(prev => ({ ...prev, [videoId]: 'playing' }));
         };
         videoElement.addEventListener('playing', playingHandler);
@@ -246,6 +270,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
         const loadedDataHandler = () => {
           console.log(`📹 Video data loaded for ${videoId}, readyState: ${videoElement.readyState}`);
           if (hlsInstancesRef.current[videoId] === hls && videoElement.readyState >= 2) {
+            clearLoadingTimeout();
             setStreamStatus(prev => ({ ...prev, [videoId]: 'playing' }));
           }
         };
@@ -254,6 +279,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
         const canPlayHandler = () => {
           console.log(`▶️ Video can play for ${videoId}`);
           if (hlsInstancesRef.current[videoId] === hls) {
+            clearLoadingTimeout();
             setStreamStatus(prev => ({ ...prev, [videoId]: 'playing' }));
           }
         };
@@ -278,6 +304,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
                   hls.startLoad();
                 } catch (e) {
                   console.error(`❌ Failed to recover from network error:`, e);
+                  clearLoadingTimeout();
                   setStreamStatus(prev => ({ ...prev, [videoId]: 'error' }));
                 }
                 break;
@@ -287,12 +314,14 @@ const LiveViewPlayer = ({ streams = [] }) => {
                   hls.recoverMediaError();
                 } catch (e) {
                   console.error(`❌ Failed to recover from media error:`, e);
+                  clearLoadingTimeout();
                   setStreamStatus(prev => ({ ...prev, [videoId]: 'error' }));
                   hls.destroy();
                 }
                 break;
               default:
                 console.error(`❌ Fatal HLS error for ${videoId}, cannot recover`);
+                clearLoadingTimeout();
                 setStreamStatus(prev => ({ ...prev, [videoId]: 'error' }));
                 hls.destroy();
                 break;
@@ -327,6 +356,10 @@ const LiveViewPlayer = ({ streams = [] }) => {
       Object.keys(hlsInstancesRef.current).forEach(videoId => {
         if (!activeVideoIds.includes(videoId)) {
           console.log(`🧹 Cleaning up HLS instance for ${videoId}`);
+          if (loadingTimeoutsRef.current[videoId]) {
+            clearTimeout(loadingTimeoutsRef.current[videoId]);
+            delete loadingTimeoutsRef.current[videoId];
+          }
           const hls = hlsInstancesRef.current[videoId];
           const videoElement = videoRefs.current[videoId];
 
@@ -369,7 +402,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
             <span>Default live broadcast duration:</span>
             <select
               value={broadcastDuration}
-              onChange={(e) => setBroadcastDuration(e.target.value)}
+              onChange={(e) => onBroadcastDurationChange?.(e.target.value)}
               className="px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
             >
               <option value="not limited">not limited</option>
@@ -489,7 +522,7 @@ const LiveViewPlayer = ({ streams = [] }) => {
                           <div className="text-center text-red-400">
                             <div className="text-4xl mb-2">⚠️</div>
                             <p className="text-sm">Stream error</p>
-                            <p className="text-xs mt-1 opacity-75">Check MediaMTX server</p>
+                            <p className="text-xs mt-1 opacity-75">MediaMTX running? HLS (8888) reachable? Device pushing?</p>
                           </div>
                         </>
                       ) : (
