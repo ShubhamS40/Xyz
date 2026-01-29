@@ -2,7 +2,6 @@ import net from 'net';
 import deviceModel from '../model/deviceModel.js';
 import prisma from '../config/database.js';
 import JC261Protocol from './jc261/jc261.js';
-import PL601Protocol from './pl601/pl601.js';
 
 class TCPServer {
   constructor(port) {
@@ -127,12 +126,8 @@ class TCPServer {
     this.calculateCRC = result.func;
     console.log(`✅ Using CRC Method ${this.crcMethod}\n`);
     
-    // Re-initialize protocol handlers with CRC function
+    // Initialize protocol handler with CRC function
     this.jc261Handler = new JC261Protocol(
-      this.calculateCRC.bind(this),
-      this.encodeIMEI.bind(this)
-    );
-    this.pl601Handler = new PL601Protocol(
       this.calculateCRC.bind(this),
       this.encodeIMEI.bind(this)
     );
@@ -158,121 +153,53 @@ class TCPServer {
   }
 
   /**
-   * Get protocol handler for device based on device model
+   * Get protocol handler for device (JC261 only)
    */
   async getProtocolHandler(imei) {
     // Check if we already have the handler cached
     if (this.deviceProtocols.has(imei)) {
-      const cached = this.deviceProtocols.get(imei);
-      // If cache is wrong (can happen when CRC invalid and PL601 mis-detected),
-      // prefer the device model stored in DB for command sending.
-      try {
-        const device = await deviceModel.getDeviceByIMEI(imei);
-        const model = device?.deviceModel ? device.deviceModel.toUpperCase() : '';
-        if (model.includes('JC261') && cached?.getDeviceModel?.() !== 'JC261') {
-          this.deviceProtocols.set(imei, this.jc261Handler);
-          return this.jc261Handler;
-        }
-        if (model.includes('PL601') && cached?.getDeviceModel?.() !== 'PL601') {
-          this.deviceProtocols.set(imei, this.pl601Handler);
-          return this.pl601Handler;
-        }
-      } catch (e) {
-        // ignore DB issues and keep cached
-      }
-      return cached;
-      }
+      return this.deviceProtocols.get(imei);
+    }
 
     try {
-      // Try to get device from database to determine model
+      // Try to get device from database to verify model
       const device = await deviceModel.getDeviceByIMEI(imei);
       
-      let handler;
       if (device && device.deviceModel) {
         const model = device.deviceModel.toUpperCase();
-        if (model.includes('PL601')) {
-          handler = this.pl601Handler;
-        } else if (model.includes('JC261')) {
-          handler = this.jc261Handler;
-        } else {
-          // Default to JC261 for unknown models
-          handler = this.jc261Handler;
+        if (!model.includes('JC261')) {
+          console.log(`⚠️  Device ${imei} model is ${model}, but only JC261 is supported`);
         }
-      } else {
-        // Default to JC261 if device not found
-        handler = this.jc261Handler;
       }
       
       // Cache the handler
-      this.deviceProtocols.set(imei, handler);
-      return handler;
+      this.deviceProtocols.set(imei, this.jc261Handler);
+      return this.jc261Handler;
     } catch (error) {
       console.error(`❌ Error getting protocol handler for ${imei}:`, error.message);
-      // Default to JC261 on error
       return this.jc261Handler;
     }
   }
 
   /**
-   * Handle incoming packet and route to appropriate protocol handler
+   * Handle incoming packet and route to JC261 protocol handler
    */
   async handlePacket(data, socket, deviceIMEI) {
-    // If deviceIMEI is null (first packet), try to detect protocol by decoding login
+    // If deviceIMEI is null (first packet), try to decode login
     if (!deviceIMEI && data.length >= 20 && data[0] === 0x78 && data[1] === 0x78 && data[3] === 0x01) {
-      console.log('🔍 Unknown device - detecting protocol from login packet...');
+      console.log('🔍 Unknown device - decoding login packet...');
       
-      // Try decoding with both handlers (without sending ACK yet)
-      const pl601Login = this.pl601Handler.decodeLogin(data);
       const jc261Login = this.jc261Handler.decodeLogin(data);
 
-      // Determine which handler successfully decoded
-      let handler = null;
-      if (pl601Login && pl601Login.imei && pl601Login.crcValid) {
-        console.log(`✅ Detected PL601 device: ${pl601Login.imei}`);
-        handler = this.pl601Handler;
-        // Cache the handler
-        this.deviceProtocols.set(pl601Login.imei, handler);
-      } else if (jc261Login && jc261Login.imei && jc261Login.crcValid) {
+      if (jc261Login && jc261Login.imei) {
         console.log(`✅ Detected JC261 device: ${jc261Login.imei}`);
-        handler = this.jc261Handler;
-        // Cache the handler
-        this.deviceProtocols.set(jc261Login.imei, handler);
-      } else if (pl601Login && pl601Login.imei) {
-        // PL601 decoded but CRC invalid - still use it
-        console.log(`⚠️  Detected PL601 device (CRC invalid): ${pl601Login.imei}`);
-        handler = this.pl601Handler;
-        this.deviceProtocols.set(pl601Login.imei, handler);
-      } else if (jc261Login && jc261Login.imei) {
-        // JC261 decoded but CRC invalid - still use it
-        console.log(`⚠️  Detected JC261 device (CRC invalid): ${jc261Login.imei}`);
-        handler = this.jc261Handler;
-        this.deviceProtocols.set(jc261Login.imei, handler);
-  }
-
-      // If we determined the handler, use it to process the packet (will send ACK)
-      if (handler) {
-        return await handler.handlePacket(data, socket, null);
-      }
-      
-      // If still unknown, try PL601 first (handles text responses too)
-      console.log('⚠️  Could not determine protocol - trying PL601 handler...');
-      const pl601Result = await this.pl601Handler.handlePacket(data, socket, null);
-      if (pl601Result && pl601Result.imei) {
-        this.deviceProtocols.set(pl601Result.imei, this.pl601Handler);
-        return pl601Result;
-      }
-
-      // Try JC261 as fallback
-      console.log('⚠️  Trying JC261 handler...');
-      const jc261Result = await this.jc261Handler.handlePacket(data, socket, null);
-      if (jc261Result && jc261Result.imei) {
-        this.deviceProtocols.set(jc261Result.imei, this.jc261Handler);
-        return jc261Result;
+        this.deviceProtocols.set(jc261Login.imei, this.jc261Handler);
+        return await this.jc261Handler.handlePacket(data, socket, null);
       }
       
       console.log('❌ Could not determine protocol from packet');
-        return null;
-      }
+      return null;
+    }
 
     // For non-login packets or when IMEI is known, get the cached handler
     if (deviceIMEI && this.deviceProtocols.has(deviceIMEI)) {
@@ -283,7 +210,7 @@ class TCPServer {
     // Get protocol handler for this device (IMEI is known but not cached)
     const handler = await this.getProtocolHandler(deviceIMEI);
 
-    // Route packet to device-specific handler
+    // Route packet to handler
     return await handler.handlePacket(data, socket, deviceIMEI);
   }
 
@@ -303,7 +230,6 @@ class TCPServer {
       let deviceModelType = null;
       let buffer = Buffer.alloc(0);
       let dataReceived = false;
-      let connectionStartTime = Date.now();
 
       // Add timeout to detect if device connects but doesn't send data
       const connectionTimeout = setTimeout(() => {
@@ -323,90 +249,15 @@ class TCPServer {
         try {
           // Log raw data (condensed format)
           if (data.length > 0) {
-    const hexData = data.toString('hex').toUpperCase();
+            const hexData = data.toString('hex').toUpperCase();
             const hexPreview = hexData.match(/../g)?.slice(0, 20).join(' ') || hexData.substring(0, 40);
             console.log(`📥 Received: ${data.length} bytes | HEX: ${hexPreview}${data.length > 20 ? '...' : ''}`);
           }
           
           buffer = Buffer.concat([buffer, data]);
 
-          // Main packet processing loop - handles both text and binary packets
+          // Main packet processing loop
           while (buffer.length > 0) {
-            // Check if this might be a text/SMS response (PL601 devices)
-            // Text responses don't start with 0x78 0x78, they're plain ASCII/UTF-8
-            const isBinaryPacket = buffer.length >= 2 && 
-                                   ((buffer[0] === 0x78 && buffer[1] === 0x78) || 
-                                    (buffer[0] === 0x79 && buffer[1] === 0x79));
-            
-            if (!isBinaryPacket) {
-              // This might be a text response - check if we have a complete text message
-              // Text messages typically end with newline, #, or are complete when we have enough data
-              
-              // Look for common text message terminators
-              const newlineIdx = buffer.indexOf(0x0A); // \n
-              const hashIdx = buffer.indexOf(0x23); // #
-              const crIdx = buffer.indexOf(0x0D); // \r
-              
-              let endIdx = -1;
-              if (newlineIdx >= 0) endIdx = newlineIdx + 1;
-              else if (crIdx >= 0) endIdx = crIdx + 1;
-              else if (hashIdx >= 0) endIdx = hashIdx + 1;
-              else if (buffer.length > 200) {
-                // If buffer is getting large and no terminator, process what we have
-                endIdx = buffer.length;
-              }
-              
-              if (endIdx > 0) {
-                // Extract text packet
-                const textPacket = buffer.slice(0, endIdx);
-                buffer = buffer.slice(endIdx);
-                
-                // Try to process as text (PL601 handler can handle this)
-                // If deviceIMEI is known, use cached handler, otherwise try PL601
-                if (deviceIMEI && this.deviceProtocols.has(deviceIMEI)) {
-                  const handler = this.deviceProtocols.get(deviceIMEI);
-                  const result = await handler.handlePacket(textPacket, socket, deviceIMEI);
-                  if (result) continue; // Processed successfully, continue loop
-                } else {
-                  // Try PL601 handler (handles text responses)
-                  const result = await this.pl601Handler.handlePacket(textPacket, socket, deviceIMEI);
-                  if (result && result.imei && !deviceIMEI) {
-                    deviceIMEI = result.imei;
-                    this.deviceProtocols.set(deviceIMEI, this.pl601Handler);
-                    this.activeConnections.set(deviceIMEI, socket);
-                  }
-                  if (result) continue; // Processed successfully, continue loop
-                }
-                
-                // If text processing failed, continue to binary packet processing
-              } else {
-                // Not enough data for text packet or no terminator found
-                // Try to find binary start marker
-                let startIdx = -1;
-                for (let i = 0; i < buffer.length - 1; i++) {
-                  if ((buffer[i] === 0x78 && buffer[i + 1] === 0x78) || 
-                      (buffer[i] === 0x79 && buffer[i + 1] === 0x79)) {
-                    startIdx = i;
-                    break;
-  }
-                }
-                
-                if (startIdx > 0) {
-                  // Found binary start, discard text before it
-                  buffer = buffer.slice(startIdx);
-                  // Continue loop to process binary packet
-                } else if (buffer.length > 500) {
-                  // Buffer too large, clear it to prevent memory issues
-                  console.log('⚠️  Clearing large buffer (no valid packet found)');
-                  buffer = Buffer.alloc(0);
-                  break;
-                } else {
-                  // Wait for more data
-                  break;
-                }
-              }
-            }
-
             // Process binary packets
             if (buffer.length < 10) {
               // Not enough data for binary packet
@@ -429,7 +280,7 @@ class TCPServer {
                 buffer = buffer.slice(startIdx);
                 continue;
               } else {
-                // No binary packet found - might be text, break to let text handler try
+                // No binary packet found
                 break;
               }
             }
@@ -469,7 +320,7 @@ class TCPServer {
             const packet = buffer.slice(0, totalPacketSize);
             buffer = buffer.slice(totalPacketSize);
 
-            // Parse the packet using device-specific handler
+            // Parse the packet using JC261 handler
             const parsedData = await this.handlePacket(packet, socket, deviceIMEI);
 
             // Handle device registration/update ONLY on login (protocol 0x01)
@@ -543,31 +394,26 @@ class TCPServer {
                 }
               }
 
-              // RSERVICE + RTMP: JC261 = 0x80, PL601 = plain text (phone-style). Both can stream.
-              if (deviceModelType === 'JC261' || deviceModelType === 'PL601') {
-                const auto = process.env.AUTO_START_RTMP_ON_CONNECT === 'true';
-                console.log('');
-                console.log('📡 RSERVICE+RTMP: Video → Live or POST /api/devices/' + deviceIMEI + '/start-rtmp');
-                if (deviceModelType === 'PL601') {
-                  console.log('   PL601: plain-text RSERVICE + RTMP (no 0x80) — same as phone.');
-                } else {
-                  console.log('   JC261: 0x80 TCP only (no SMS).');
-                }
-                console.log('   Auto-send on connect: ' + (auto ? 'ON' : 'OFF'));
-                console.log('');
-                if (auto && !this.autoStartedRTMP.has(deviceIMEI)) {
-                  this.autoStartedRTMP.add(deviceIMEI);
-                  const how = deviceModelType === 'PL601' ? 'plain-text' : '0x80';
-                  console.log('🔄 AUTO_START_RTMP: Sending RSERVICE + RTMP (' + how + ') for ' + deviceIMEI + ' in 2.5s...');
-                  const imei = deviceIMEI;
-                  setTimeout(() => {
-                    this.startRTMPStream(imei, null, 0, 15).then(() => {
-                      console.log('✅ AUTO_START_RTMP: RSERVICE + RTMP sent for ' + imei);
-                    }).catch((e) => {
-                      console.error('❌ AUTO_START_RTMP failed for ' + imei + ':', e && e.message ? e.message : e);
-                    });
-                  }, 2500);
-                }
+              // 🔥🔥🔥 CRITICAL FIX: CHANGED FROM 0 TO 'INOUT' FOR DUAL CAMERA 🔥🔥🔥
+              // RSERVICE + RTMP auto-start for JC261
+              const auto = process.env.AUTO_START_RTMP_ON_CONNECT === 'true';
+              console.log('');
+              console.log('📡 RSERVICE+RTMP: Video → Live or POST /api/devices/' + deviceIMEI + '/start-rtmp');
+              console.log('   JC261: 0x80 TCP only (no SMS).');
+              console.log('   Auto-send on connect: ' + (auto ? 'ON' : 'OFF'));
+              console.log('');
+              if (auto && !this.autoStartedRTMP.has(deviceIMEI)) {
+                this.autoStartedRTMP.add(deviceIMEI);
+                console.log('🔄 AUTO_START_RTMP: Sending RSERVICE + RTMP (0x80) for ' + deviceIMEI + ' in 2.5s...');
+                const imei = deviceIMEI;
+                setTimeout(() => {
+                  // ✅✅✅ THE FIX: Changed from 0 to 'INOUT' for BOTH cameras ✅✅✅
+                  this.startRTMPStream(imei, null, 'INOUT', 15).then(() => {
+                    console.log('✅ AUTO_START_RTMP: RSERVICE + RTMP sent for ' + imei);
+                  }).catch((e) => {
+                    console.error('❌ AUTO_START_RTMP failed for ' + imei + ':', e && e.message ? e.message : e);
+                  });
+                }, 2500);
               }
             } else if (parsedData && parsedData.imei && !deviceIMEI) {
               // Set deviceIMEI for tracking, but don't update database
@@ -647,7 +493,7 @@ class TCPServer {
                       data: updateData
                     });
                     
-                  this.lastStatusUpdates.set(deviceIMEI, now);
+                    this.lastStatusUpdates.set(deviceIMEI, now);
                   }
                 } catch (error) {
                   console.error(`❌ Error updating heartbeat status:`, error.message);
@@ -717,8 +563,8 @@ class TCPServer {
           // Only clear if buffer is suspiciously large
           if (buffer.length > 1000) {
             console.log('⚠️  Clearing large buffer due to error');
-          buffer = Buffer.alloc(0);
-        }
+            buffer = Buffer.alloc(0);
+          }
         }
       });
 
@@ -776,7 +622,7 @@ class TCPServer {
 
     this.server.listen(this.port, '0.0.0.0', () => {
       console.log('='.repeat(70));
-      console.log('🛰️  JT808 GPS TRACKER SERVER (MULTI-PROTOCOL)');
+      console.log('🛰️  JT808 GPS TRACKER SERVER (JC261)');
       console.log('='.repeat(70));
       console.log(`📡 Listening on 0.0.0.0:${this.port}...`);
       console.log('⏳ Waiting for device connection...');
@@ -808,9 +654,10 @@ class TCPServer {
   }
 
   /**
-   * Start RTMP streaming for a device
+   * Start RTMP streaming for a device (JC261 only)
+   * ✅ DEFAULT CHANGED TO 'INOUT' FOR DUAL CAMERA
    */
-  async startRTMPStream(imei, rtmpUrl = null, cameraIndex = 0, durationMinutes = 15) {
+  async startRTMPStream(imei, rtmpUrl = null, cameraIndex = 'INOUT', durationMinutes = 15) {
     try {
       if (!this.activeConnections || !this.activeConnections.has(imei)) {
         console.error(`❌ Device ${imei} not in active connections`);
@@ -819,22 +666,9 @@ class TCPServer {
       }
 
       const handler = await this.getProtocolHandler(imei);
-      const deviceModel = handler.getDeviceModel();
-      
-      console.log(`🔍 Device ${imei} handler: ${deviceModel}`);
-      console.log(`📋 Cached protocols: ${Array.from(this.deviceProtocols.keys()).map(k => `${k}=${this.deviceProtocols.get(k)?.getDeviceModel?.() || 'unknown'}`).join(', ')}`);
-      
-      if (deviceModel === 'JC261') {
-        const result = handler.startRTMPStream(imei, rtmpUrl, cameraIndex, durationMinutes, this.activeConnections);
-        console.log(`📤 RTMP start command result for ${imei}: ${result}`);
-        return result;
-      }
-      if (deviceModel === 'PL601') {
-        console.log(`📤 PL601: plain-text RSERVICE + RTMP (no 0x80) — same as phone`);
-        return handler.startRTMPStream(imei, rtmpUrl, cameraIndex, durationMinutes, this.activeConnections);
-      }
-      console.log(`⚠️  ${deviceModel}: using JC261-style 0x80 RSERVICE + RTMP for ${imei}`);
-      return this.jc261Handler.startRTMPStream(imei, rtmpUrl, cameraIndex, durationMinutes, this.activeConnections);
+      const result = handler.startRTMPStream(imei, rtmpUrl, cameraIndex, durationMinutes, this.activeConnections);
+      console.log(`📤 RTMP start command result for ${imei}: ${result}`);
+      return result;
     } catch (error) {
       console.error(`❌ Error in startRTMPStream for ${imei}:`, error);
       return false;
@@ -842,16 +676,11 @@ class TCPServer {
   }
 
   /**
-   * Stop RTMP streaming for a device.
-   * JC261 = 0x80 RTMP,OFF#; PL601 = plain-text RTMP,OFF#.
+   * Stop RTMP streaming for a device (JC261 only)
    */
   async stopRTMPStream(imei) {
     const handler = await this.getProtocolHandler(imei);
-    const model = handler.getDeviceModel();
-    if (model === 'JC261' || model === 'PL601') {
-      return handler.stopRTMPStream(imei, this.activeConnections);
-    }
-    return this.jc261Handler.stopRTMPStream(imei, this.activeConnections);
+    return handler.stopRTMPStream(imei, this.activeConnections);
   }
 
   /**
@@ -859,8 +688,8 @@ class TCPServer {
    */
   async sendCommandToDevice(imei, commandType) {
     const handler = await this.getProtocolHandler(imei);
-    console.log(`📤 Sending ${commandType} command to ${handler.getDeviceModel()} device ${imei}`);
-      return true;
+    console.log(`📤 Sending ${commandType} command to JC261 device ${imei}`);
+    return true;
   }
 }
 

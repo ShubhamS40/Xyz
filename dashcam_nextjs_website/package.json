@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
+    "@easydarwin/easyplayer": "^5.1.6",
     "antd": "^6.2.1",
+    "copy-webpack-plugin": "^13.0.1",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.562.0",
     "next": "15.1.6",

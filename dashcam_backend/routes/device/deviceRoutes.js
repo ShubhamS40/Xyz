@@ -68,39 +68,105 @@ router.post('/:imei/start-rtmp', async (req, res) => {
       });
     }
     
-    // Check if device is connected
+    // Duration 2–180 min per JC261 spec; default 15. Use 180 for "not limited".
+    let dur = typeof durationMinutes === 'number' ? durationMinutes : parseInt(durationMinutes, 10);
+    if (Number.isNaN(dur) || dur < 2) dur = 15;
+    if (dur > 180) dur = 180;
+
+    // Determine protocol handler to adjust stream path for PL601 (single /live path)
+    const handler = await tcpServer.getProtocolHandler(imei);
+    const model = handler.getDeviceModel();
+    const isPL601 = model === 'PL601';
+    
+    const publicRtmpHost = process.env.RTMP_PUBLIC_HOST || 'bore.pub';
+    const publicRtmpPort = process.env.RTMP_PUBLIC_PORT || '22797';
+    
+    // Prepare URLs
+    let rtmpUrlForDevice;
+    let hlsPath;
+    
+    if (isPL601) {
+      rtmpUrlForDevice = rtmpUrl || `rtmp://${publicRtmpHost}:${publicRtmpPort}/live`;
+      hlsPath = 'live';
+    } else {
+      // JC261: Device appends /Channel/IMEI automatically to the RSERVICE URL
+      // So we must send the BASE URL (e.g. .../live)
+      rtmpUrlForDevice = rtmpUrl || `rtmp://${publicRtmpHost}:${publicRtmpPort}/live`;
+      hlsPath = `live/${cameraIndex}/${imei}`;
+    }
+
+    const computedRtmpUrl = rtmpUrlForDevice;
+    
+    console.log(`📡 Sending RTMP URL to device: ${computedRtmpUrl}`);
+    console.log(`📡 HLS Path: ${hlsPath}`);
+
+    // Check if device is connected to the TCP server
     const isConnected = tcpServer.activeConnections && tcpServer.activeConnections.has(imei);
     const activeIMEIs = tcpServer.activeConnections ? Array.from(tcpServer.activeConnections.keys()) : [];
     
     console.log(`🔍 Start RTMP request for IMEI: ${imei}`);
     console.log(`📋 Active connections: ${activeIMEIs.join(', ')}`);
     console.log(`✅ Device connected: ${isConnected}`);
-    
+
+    /**
+     * ⚠️ IMPORTANT:
+     * In many dev setups (or when AUTO_START_RTMP_ON_CONNECT is enabled), the RTMP/HLS
+     * stream might already be running even if the TCP tracker connection is not present
+     * in this process (for example when MediaMTX is fed by another service or a previous
+     * command).
+     *
+     * To avoid breaking the frontend UX with a 404, we now ALWAYS return a successful
+     * response with a computed HLS URL. When the device is not connected, we simply
+     * skip sending RSERVICE/RTMP commands and mark `deviceConnected: false`.
+     *
+     * The frontend can still attempt to play the stream; if there is really no RTMP
+     * publisher, HLS.js will surface a playback error and the player UI will show
+     * "Stream error", which is the correct behaviour.
+     */
     if (!isConnected) {
-      return res.status(404).json({
-        success: false,
-        message: `Device not connected. Please ensure device is online and connected to server. Active devices: ${activeIMEIs.length > 0 ? activeIMEIs.join(', ') : 'none'}`,
+      const serverIp = process.env.SERVER_IP || '98.70.101.16';
+      const hlsPort = process.env.MEDIAMTX_HLS_PORT || '8888';
+
+      const publicHlsBase = process.env.MEDIAMTX_HLS_PUBLIC_URL || '';
+      let hlsStreamUrl;
+      if (publicHlsBase) {
+        const base = publicHlsBase.replace(/\/$/, '');
+        hlsStreamUrl = `${base}/${hlsPath}/index.m3u8`;
+      } else {
+        const reqHost = (req.hostname || '').toLowerCase();
+        const origin = (req.headers.origin || '').toLowerCase();
+        const isLocalhost = reqHost === 'localhost' || reqHost === '127.0.0.1' ||
+                           origin.includes('localhost') || origin.includes('127.0.0.1');
+        const hlsHost = isLocalhost ? 'localhost' : serverIp;
+        hlsStreamUrl = `http://${hlsHost}:${hlsPort}/${hlsPath}/index.m3u8`;
+      }
+
+      console.log('⚠️ Device reported as NOT connected to TCP server.');
+      console.log(`   Returning computed HLS URL anyway so UI can attempt playback: ${hlsStreamUrl}`);
+
+      return res.json({
+        success: true,
+        message: `Device not connected to TCP server; assuming RTMP/HLS is managed externally or already running.`,
         deviceConnected: false,
+        cameraIndex,
+        channel: cameraIndex + 1,
+        durationMinutes: dur,
+        commandsSent: [],
+        streamUrl: hlsStreamUrl,
+        hlsUrl: hlsStreamUrl,
+        rtmpUrl: computedRtmpUrl,
         activeDevices: activeIMEIs
       });
     }
     
-    // Duration 2–180 min per JC261 spec; default 15. Use 180 for "not limited".
-    let dur = typeof durationMinutes === 'number' ? durationMinutes : parseInt(durationMinutes, 10);
-    if (Number.isNaN(dur) || dur < 2) dur = 15;
-    if (dur > 180) dur = 180;
-    
-    const success = await tcpServer.startRTMPStream(imei, rtmpUrl, cameraIndex, dur);
+    const success = await tcpServer.startRTMPStream(imei, computedRtmpUrl, cameraIndex, dur);
 
     console.log(`📤 RTMP start result: ${success}`);
 
     if (success) {
       const serverIp = process.env.SERVER_IP || '98.70.101.16';
       const hlsPort = process.env.MEDIAMTX_HLS_PORT || '8888';
-      const publicRtmpHost = process.env.RTMP_PUBLIC_HOST || 'bore.pub';
-      const publicRtmpPort = process.env.RTMP_PUBLIC_PORT || '22797';
-      const streamPath = `live/${cameraIndex}/${imei}`;
-      const rtmpStreamUrl = rtmpUrl || `rtmp://${publicRtmpHost}:${publicRtmpPort}/${streamPath}`;
+      const rtmpStreamUrl = computedRtmpUrl;
       const cameraMode = cameraIndex === 0 ? 'OUT' : (cameraIndex === 1 ? 'IN' : 'INOUT');
 
       console.log('');
@@ -116,14 +182,14 @@ router.post('/:imei/start-rtmp', async (req, res) => {
       let hlsStreamUrl;
       if (publicHlsBase) {
         const base = publicHlsBase.replace(/\/$/, '');
-        hlsStreamUrl = `${base}/${streamPath}/index.m3u8`;
+        hlsStreamUrl = `${base}/${hlsPath}/index.m3u8`;
       } else {
         const reqHost = (req.hostname || '').toLowerCase();
         const origin = (req.headers.origin || '').toLowerCase();
         const isLocalhost = reqHost === 'localhost' || reqHost === '127.0.0.1' ||
                            origin.includes('localhost') || origin.includes('127.0.0.1');
         const hlsHost = isLocalhost ? 'localhost' : serverIp;
-        hlsStreamUrl = `http://${hlsHost}:${hlsPort}/${streamPath}/index.m3u8`;
+        hlsStreamUrl = `http://${hlsHost}:${hlsPort}/${hlsPath}/index.m3u8`;
       }
       
       console.log(`📺 Generated HLS URL: ${hlsStreamUrl}`);

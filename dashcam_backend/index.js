@@ -6,9 +6,50 @@ import locationRoutes from './routes/location/locationRoutes.js';
 import adminRoutes from './routes/admin/adminRoutes.js';
 import userRoutes from './routes/user/userRoutes.js';
 import TCPServer from './services/tcpServer.js';
+import { spawn } from 'child_process';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load environment variables
 dotenv.config();
+
+// Function to start MediaMTX
+const startMediaMTX = () => {
+  const mediaMtxPath = path.join(__dirname, 'services', 'jc261', 'mediamtx', 'mediamtx.exe');
+  
+  if (!fs.existsSync(mediaMtxPath)) {
+    console.error(`❌ MediaMTX executable not found at: ${mediaMtxPath}`);
+    return;
+  }
+
+  console.log(`🚀 Starting MediaMTX...`);
+  const mediaMtxProcess = spawn(mediaMtxPath, [], {
+    cwd: path.dirname(mediaMtxPath),
+    stdio: 'inherit', // Show logs in console
+    detached: false
+  });
+
+  mediaMtxProcess.on('spawn', () => {
+    console.log(`✅ MediaMTX started successfully (PID: ${mediaMtxProcess.pid})`);
+  });
+
+  mediaMtxProcess.on('error', (err) => {
+    console.error(`❌ Failed to start MediaMTX: ${err.message}`);
+  });
+
+  mediaMtxProcess.on('close', (code) => {
+    console.log(`⚠️ MediaMTX process exited with code ${code}`);
+  });
+  
+  // Kill MediaMTX when this process exits
+  process.on('exit', () => {
+    mediaMtxProcess.kill();
+  });
+};
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -109,6 +150,9 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`📡 API Base URL: http://localhost:${PORT}/api`);
   console.log(`🌐 External URL: http://${process.env.SERVER_IP || 'YOUR_IP'}:${PORT}/api`);
   console.log(`🖥️  Server IP: ${process.env.SERVER_IP || 'Not configured'}\n`);
+  
+  // Start MediaMTX
+  startMediaMTX();
 });
 
 // Start TCP Server for JC261 devices
