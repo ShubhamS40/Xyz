@@ -5,7 +5,9 @@ import deviceRoutes from './routes/device/deviceRoutes.js';
 import locationRoutes from './routes/location/locationRoutes.js';
 import adminRoutes from './routes/admin/adminRoutes.js';
 import userRoutes from './routes/user/userRoutes.js';
-import TCPServer from './services/tcpServer.js';
+import playbackRoutes from './routes/device/playbackRoutes.js'; // ✅ NEW: Playback routes
+import TCPServer from './services/jc261/tcpServer.js';
+import JC261PlaybackService from './services/jc261/jc261Playback.js'; // ✅ NEW: Playback service
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -91,6 +93,7 @@ app.get('/', (req, res) => {
       locations: '/api/locations',
       admin: '/api/admin',
       user: '/api/user',
+      playback: '/api/playback', // ✅ NEW
       health: '/health'
     }
   });
@@ -108,6 +111,7 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/playback', playbackRoutes); // ✅ NEW: Playback routes
 
 // Test route to verify server is running
 app.get('/api/test', (req, res) => {
@@ -118,6 +122,7 @@ app.get('/api/test', (req, res) => {
     routes: {
       devices: '/api/devices',
       locations: '/api/locations',
+      playback: '/api/playback', // ✅ NEW
       health: '/health'
     }
   });
@@ -155,12 +160,34 @@ app.listen(PORT, '0.0.0.0', () => {
   startMediaMTX();
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ✅ PLAYBACK SERVICE INITIALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
 // Start TCP Server for JC261 devices
 const tcpServer = new TCPServer(TCP_PORT);
 tcpServer.start();
 
-// Make tcpServer available globally for routes and controllers
+// ✅ Initialize Playback Service
+console.log('🎬 Initializing JC261 Playback Service...');
+const playbackService = new JC261PlaybackService(
+  tcpServer.calculateCRC.bind(tcpServer),
+  tcpServer.jc261Handler
+);
+console.log('✅ Playback Service initialized\n');
+
+// ✅ Make services available to routes via app.set()
+app.set('tcpServer', tcpServer);
+app.set('playbackService', playbackService);
+
+// Make tcpServer available globally for routes and controllers (for backward compatibility)
 global.tcpServer = tcpServer;
+global.playbackService = playbackService; // ✅ NEW: Also make playback service global
+
+// ✅ Cleanup old playback sessions every 30 minutes
+setInterval(() => {
+  playbackService.cleanupOldSessions(30);
+}, 30 * 60 * 1000);
 
 // Graceful shutdown
 process.on('SIGINT', () => {
@@ -170,3 +197,31 @@ process.on('SIGINT', () => {
   }
   process.exit(0);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ✅ PLAYBACK USAGE INFORMATION
+// ═══════════════════════════════════════════════════════════════════════════════
+console.log('┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓');
+console.log('┃              JC261 PLAYBACK SERVICE READY                          ┃');
+console.log('┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛');
+console.log('');
+console.log('📹 Playback Endpoints:');
+console.log('   POST   /api/playback/request-list/:imei  - Request video list');
+console.log('   GET    /api/playback/videos/:imei        - Get available videos');
+console.log('   POST   /api/playback/start/:imei         - Start playback');
+console.log('   POST   /api/playback/stop/:imei          - Stop playback');
+console.log('   POST   /api/playback/video-list          - Device callback (auto)');
+console.log('');
+console.log('🔗 Device will POST video list to:');
+console.log(`   http://${process.env.HTTP_PUBLIC_HOST}:${process.env.HTTP_PUBLIC_PORT}/api/playback/video-list`);
+console.log('');
+console.log('📺 Stream URLs (after playback starts):');
+console.log('   RTMP:     rtmp://localhost:1936/live/{imei}');
+console.log('   HTTP-FLV: http://localhost:8888/live/{imei}.flv');
+console.log('   HLS:      http://localhost:8888/live/{imei}/hls.m3u8');
+console.log('');
+console.log('💡 Quick Test:');
+console.log('   curl -X POST http://localhost:5000/api/playback/request-list/864993060968006');
+console.log('');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('');

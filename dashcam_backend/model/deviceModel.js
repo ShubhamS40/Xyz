@@ -50,6 +50,23 @@ class DeviceModel {
     
     if (!device) return null;
     
+    // Handle VL502 data
+    if ((device.deviceModel === 'VL502' || device.vl502Locations?.length > 0) && device.vl502Locations && device.vl502Locations.length > 0) {
+      const latestData = device.vl502Locations[0];
+      return {
+        ...device,
+        latitude: latestData.latitude,
+        longitude: latestData.longitude,
+        speed: latestData.speed,
+        accStatus: latestData.accOn ? 1 : 0,
+        lastSeen: latestData.receivedAt,
+        address: latestData.address,
+        gnssType: 'GPS',
+        satellites: latestData.satelliteCount || 0,
+        signalStrength: latestData.signalStrength || 'Medium'
+      };
+    }
+
     // If device has location in Device model, use it; otherwise use latest from DeviceData
     if (!device.latitude && device.data && device.data.length > 0) {
       const latestData = device.data[0];
@@ -58,7 +75,10 @@ class DeviceModel {
         latitude: latestData.latitude,
         longitude: latestData.longitude,
         speed: latestData.speed,
-        accStatus: latestData.accStatus
+        accStatus: latestData.accStatus,
+        gnssType: latestData.gnssType,
+        satellites: latestData.satellites,
+        signalStrength: latestData.signalStrength
       };
     }
     
@@ -131,11 +151,31 @@ class DeviceModel {
         data: {
           take: 1,
           orderBy: { receivedAt: 'desc' }
+        },
+        vl502Locations: {
+          take: 1,
+          orderBy: { receivedAt: 'desc' }
         }
       }
     });
     
     if (!device) return null;
+
+    // Handle VL502 data
+    if ((device.deviceModel === 'VL502' || device.vl502Locations?.length > 0) && device.vl502Locations && device.vl502Locations.length > 0) {
+      const latest = device.vl502Locations[0];
+      return {
+        latitude: latest.latitude,
+        longitude: latest.longitude,
+        speed: latest.speed,
+        accStatus: latest.accOn ? 1 : 0,
+        gnssType: 'GPS', // Default for VL502
+        satellites: latest.satelliteCount || 0,
+        signalStrength: latest.signalStrength || 'Medium',
+        address: latest.address,
+        lastSeen: latest.receivedAt
+      };
+    }
     
     // Return location from Device model or latest from DeviceData
     if (device.latitude && device.longitude) {

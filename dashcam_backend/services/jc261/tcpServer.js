@@ -1,7 +1,7 @@
 import net from 'net';
-import deviceModel from '../model/deviceModel.js';
-import prisma from '../config/database.js';
-import JC261Protocol from './jc261/jc261.js';
+import deviceModel from '../../model/deviceModel.js';
+import prisma from '../../config/database.js';
+import JC261Protocol from './jc261.js';
 
 class TCPServer {
   constructor(port) {

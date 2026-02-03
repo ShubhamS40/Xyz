@@ -6,6 +6,8 @@ export default function DeviceDetailCard({ device, onClose }) {
   const [address, setAddress] = useState(device?.address || null);
   const [loadingAddress, setLoadingAddress] = useState(false);
   const [autoAccStatus, setAutoAccStatus] = useState('OFF');
+  const [vl502Data, setVl502Data] = useState(null);
+  const [vehicleStatus, setVehicleStatus] = useState('Unknown');
 
   const fallbackDevice = {
     id: 'JC182-04062',
@@ -72,6 +74,29 @@ export default function DeviceDetailCard({ device, onClose }) {
 
     fetchAddress();
   }, [data?.latitude, data?.longitude, data?.address]);
+
+  // Fetch VL502 specific data (OBD)
+  useEffect(() => {
+    if (data?.deviceModel === 'VL502' && data?.imei) {
+      const fetchVL502Data = async () => {
+        try {
+          const res = await fetch(`http://localhost:5000/api/vl502/location/${data.imei}/live`);
+          const json = await res.json();
+          if (json.success && json.data) {
+             setVl502Data(json.data);
+             if (json.data.vehicleStatus) {
+                 setVehicleStatus(json.data.vehicleStatus);
+             }
+          }
+        } catch (e) {
+          console.error("Failed to fetch VL502 data", e);
+        }
+      };
+      fetchVL502Data();
+      const interval = setInterval(fetchVL502Data, 10000); // Poll every 10s
+      return () => clearInterval(interval);
+    }
+  }, [data?.imei, data?.deviceModel]);
 
   const getTitle = () => {
     if (data.deviceName) return data.deviceName;
@@ -261,6 +286,14 @@ export default function DeviceDetailCard({ device, onClose }) {
               <span className={`text-sm font-medium ${getAccStatusColor()}`}>
                 (ACC: {getAccStatus()})
               </span>
+              {/* Vehicle Status Badge */}
+              <span className={`px-2 py-0.5 text-xs font-bold rounded ${
+                vehicleStatus === 'Moving' ? 'bg-green-100 text-green-800' :
+                vehicleStatus === 'Idle' ? 'bg-yellow-100 text-yellow-800' :
+                'bg-gray-100 text-gray-800'
+              }`}>
+                {vehicleStatus}
+              </span>
             </div>
             {getDaysOffline() && (
               <span className="text-sm font-medium text-black">
@@ -308,6 +341,63 @@ export default function DeviceDetailCard({ device, onClose }) {
           </div>
           <p className="text-sm text-black">{getCoordinates()}</p>
         </div>
+
+        {/* OBD Data Section (VL502 Only) */}
+        {data.deviceModel === 'VL502' && vl502Data?.obd && (
+          <div className="p-4 border-b border-gray-300 bg-gray-50">
+            <h3 className="text-sm font-medium text-black mb-3">Vehicle OBD Data</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className="text-xs text-gray-500 block">Accumulated Mileage</span>
+                <span className="text-sm font-medium text-black">
+                  {vl502Data.obd.accumulatedMileage ? `${(vl502Data.obd.accumulatedMileage / 1000).toFixed(1)} km` : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-gray-500 block">Battery Voltage</span>
+                <span className="text-sm font-medium text-black">
+                  {vl502Data.obd.batteryVoltage ? `${vl502Data.obd.batteryVoltage} V` : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-gray-500 block">Coolant Temp</span>
+                <span className="text-sm font-medium text-black">
+                  {vl502Data.obd.coolantTemp ? `${vl502Data.obd.coolantTemp} °C` : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-gray-500 block">Engine RPM</span>
+                <span className="text-sm font-medium text-black">
+                  {vl502Data.obd.rpm ? `${vl502Data.obd.rpm} rpm` : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-gray-500 block">Fuel Level</span>
+                <span className="text-sm font-medium text-black">
+                  {vl502Data.obd.fuelLevel ? `${vl502Data.obd.fuelLevel} %` : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-xs text-gray-500 block">Intake Pressure</span>
+                <span className="text-sm font-medium text-black">
+                  {vl502Data.obd.intakePressure ? `${vl502Data.obd.intakePressure} kPa` : '—'}
+                </span>
+              </div>
+              <div>
+                 <span className="text-xs text-gray-500 block">Engine Load</span>
+                 <span className="text-sm font-medium text-black">
+                   {vl502Data.obd.engineLoad ? `${vl502Data.obd.engineLoad} %` : '—'}
+                 </span>
+              </div>
+              <div>
+                 <span className="text-xs text-gray-500 block">Intake Air Temp</span>
+                 <span className="text-sm font-medium text-black">
+                   {vl502Data.obd.intakeAirTemp ? `${vl502Data.obd.intakeAirTemp} °C` : '—'}
+                 </span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Device Information Section */}
         <div className="p-4 border-b border-gray-300">

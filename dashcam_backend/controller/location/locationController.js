@@ -124,15 +124,8 @@ class LocationController {
     try {
       const { imei } = req.params;
       
-      const device = await prisma.device.findUnique({
-        where: { imei },
-        include: {
-          data: {
-            take: 1,
-            orderBy: { receivedAt: 'desc' }
-          }
-        }
-      });
+      // Use deviceModel to get device with latest location (handles JC261 and VL502)
+      const device = await deviceModel.getDeviceByIMEI(imei);
       
       if (!device) {
         return res.status(404).json({
@@ -141,17 +134,18 @@ class LocationController {
         });
       }
 
-      if (!device.data || device.data.length === 0) {
-        // Calculate status based on lastSeen if no location data
-        let actualStatus = 'offline';
-        if (device.lastSeen) {
-          const lastSeenTime = new Date(device.lastSeen).getTime();
-          const now = Date.now();
-          const diffMinutes = (now - lastSeenTime) / (1000 * 60);
-          actualStatus = diffMinutes <= 4 ? 'online' : 'offline';
-        }
-        
-        return res.json({
+      // Calculate status based on lastSeen
+      let actualStatus = 'offline';
+      if (device.lastSeen) {
+        const lastSeenTime = new Date(device.lastSeen).getTime();
+        const now = Date.now();
+        const diffMinutes = (now - lastSeenTime) / (1000 * 60);
+        actualStatus = diffMinutes <= 4 ? 'online' : 'offline';
+      }
+
+      // Check if we have location data
+      if (!device.latitude || !device.longitude) {
+         return res.json({
           success: true,
           data: {
             imei: device.imei,
@@ -166,47 +160,29 @@ class LocationController {
             signalStrength: null,
             receivedAt: null,
             lastSeen: device.lastSeen,
-            status: actualStatus, // Calculated based on 4-minute threshold
+            status: actualStatus,
             message: 'No location data available yet. Device may need time to acquire GPS signal.'
           }
         });
       }
-
-      const latestData = device.data[0];
       
-      // Calculate actual status based on receivedAt timestamp
-      // Device is online if location data received within last 4 minutes
-      let actualStatus = device.status;
-      if (latestData.receivedAt) {
-        const lastDataTime = new Date(latestData.receivedAt).getTime();
-        const now = Date.now();
-        const diffMinutes = (now - lastDataTime) / (1000 * 60);
-        actualStatus = diffMinutes <= 4 ? 'online' : 'offline';
-      } else if (device.lastSeen) {
-        const lastSeenTime = new Date(device.lastSeen).getTime();
-        const now = Date.now();
-        const diffMinutes = (now - lastSeenTime) / (1000 * 60);
-        actualStatus = diffMinutes <= 4 ? 'online' : 'offline';
-      } else {
-        actualStatus = 'offline';
-      }
-      
+      // We have location data
       res.json({
         success: true,
         data: {
           imei: device.imei,
           deviceName: device.deviceName,
           deviceModel: device.deviceModel,
-          latitude: latestData.latitude,
-          longitude: latestData.longitude,
-          speed: latestData.speed,
-          accStatus: latestData.accStatus, // 0x00 = 0 (OFF), 0x01 = 1 (ON)
-          gnssType: latestData.gnssType || 'GPS',
-          satellites: latestData.satellites || 0,
-          signalStrength: latestData.signalStrength || 'Medium',
-          receivedAt: latestData.receivedAt,
+          latitude: device.latitude,
+          longitude: device.longitude,
+          speed: device.speed,
+          accStatus: device.accStatus,
+          gnssType: device.gnssType || 'GPS',
+          satellites: device.satellites || 0,
+          signalStrength: device.signalStrength || 'Medium',
+          receivedAt: device.lastSeen, // deviceModel maps lastSeen to receivedAt for location
           lastSeen: device.lastSeen,
-          status: actualStatus // Calculated based on 4-minute threshold
+          status: actualStatus
         }
       });
     } catch (error) {

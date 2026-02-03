@@ -7,6 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔧 EXISTING MODELS (Keep as is)
+// ═══════════════════════════════════════════════════════════════════════════════
+
 model Admin {
   id              Int                   @id @default(autoincrement())
   email           String                @unique
@@ -45,134 +49,6 @@ model AdminRegistrationOtp {
 
   @@index([adminId])
   @@map("admin_registration_otps")
-}
-
-model DeviceInventory {
-  id              Int       @id @default(autoincrement())
-  deviceModel     String    @map("device_model")
-  imei            String    @unique
-  status          String    @default("unassigned")
-  vendor          String?   @map("vendor_name")
-  category        String    @map("device_category")
-  unitPrice       Float?    @map("unit_price")
-  companyName     String?   @map("company_name")
-  assignedToType  String?   @map("assigned_to_type")
-  assignedToId    Int?      @map("assigned_to_id")
-  assignedToName  String?   @map("assigned_to_name")
-  activationDate  DateTime? @map("activation_date")
-  cameraChannels   Int?      @map("camera_channels")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
-
-  @@index([deviceModel])
-  @@index([status])
-  @@index([category])
-  @@map("device_inventory")
-}
-
-model Device {
-  id              Int            @id @default(autoincrement())
-  imei            String         @unique
-  deviceName      String?        @map("device_name")
-  deviceModel     String         @default("JC261") @map("device_model")
-  status          String         @default("inactive")
-  category        String         @default("Other") @map("device_category")
-  vendor          String?        @map("vendor_name")
-  unitPrice       Float?         @map("unit_price")
-  companyName     String?        @map("company_name")
-  assignedToType  String?        @map("assigned_to_type")
-  assignedToId    Int?           @map("assigned_to_id")
-  assignedToName  String?        @map("assigned_to_name")
-  activationDate  DateTime?      @map("activation_date")
-  lastSeen        DateTime?      @map("last_seen")
-  ipAddress       String?        @map("ip_address")
-  serverIp        String?        @map("server_ip")
-  serverPort      Int?           @map("server_port")
-  
-  // ✅ NEW FIELDS from images
-  simNumber       String?        @map("sim_number")
-  phoneNumber     String?        @map("phone_number")
-  driverName      String?        @map("driver_name")
-  numberPlate     String?        @map("number_plate")
-  cameraChannels   Int?           @map("camera_channels")
-  
-  createdAt       DateTime       @default(now()) @map("created_at")
-  updatedAt       DateTime       @updatedAt @map("updated_at")
-
-  data            DeviceData[]
-  logs            DeviceLog[]
-  trackHistory    TrackHistory[]
-
-  @@index([deviceModel])
-  @@index([status])
-  @@index([category])
-  @@index([assignedToType])
-  @@index([assignedToId])
-  @@index([simNumber])
-  @@index([phoneNumber])
-  @@map("devices")
-}
-
-model DeviceLog {
-  id        Int      @id @default(autoincrement())
-  deviceId  Int      @map("device_id")
-  eventType String   @map("event_type")
-  ipAddress String?  @map("ip_address")
-  timestamp DateTime @default(now())
-  details   String?  @db.Text
-  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-
-  @@index([deviceId])
-  @@map("device_logs")
-}
-
-model DeviceData {
-  id             Int      @id @default(autoincrement())
-  deviceId       Int      @map("device_id")
-  
-  // ✅ EXISTING FIELDS
-  latitude       Float?
-  longitude      Float?
-  speed          Float?
-  accStatus      Int?     @map("acc_status")
-  gnssType       String?  @map("gnss_type")
-  satellites     Int?     @default(0)
-  signalStrength String?  @map("signal_strength")
-  receivedAt     DateTime @default(now()) @map("received_at")
-  
-  // ✅ NEW FIELDS from images
-  ignition       Boolean? @default(false)              // Ignition status
-  positionTime   DateTime? @map("position_time")       // Position Time
-  azimuth        Float?                                // Azimuth (direction/heading)
-  positionType   String?  @map("position_type")        // Position type (GPS/LBS/WIFI)
-  dataType       String?  @map("data_type")            // Data Type
-  coordinates    String?                               // Combined lat,lng string
-  address        String?  @db.Text                     // Reverse geocoded address
-  
-  device         Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-
-  @@index([deviceId])
-  @@index([receivedAt])
-  @@index([positionTime])
-  @@map("device_data")
-}
-
-model TrackHistory {
-  id            Int      @id @default(autoincrement())
-  deviceId      Int      @map("device_id")
-  imei          String
-  startTime     DateTime @map("start_time")
-  endTime       DateTime @map("end_time")
-  totalDistance Float    @map("total_distance_km")
-  avgSpeed      Float    @map("avg_speed_kmh")
-  maxSpeed      Float?   @map("max_speed_kmh")
-  createdAt     DateTime @default(now()) @map("created_at")
-
-  device        Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-
-  @@index([deviceId])
-  @@index([startTime, endTime])
-  @@map("track_history")
 }
 
 model User {
@@ -215,4 +91,690 @@ model UserRegistrationOtp {
 
   @@index([userId])
   @@map("user_registration_otps")
+}
+
+model DeviceInventory {
+  id              Int       @id @default(autoincrement())
+  deviceModel     String    @map("device_model")
+  imei            String    @unique
+  status          String    @default("unassigned")
+  vendor          String?   @map("vendor_name")
+  category        String    @map("device_category")
+  unitPrice       Float?    @map("unit_price")
+  companyName     String?   @map("company_name")
+  assignedToType  String?   @map("assigned_to_type")
+  assignedToId    Int?      @map("assigned_to_id")
+  assignedToName  String?   @map("assigned_to_name")
+  activationDate  DateTime? @map("activation_date")
+  cameraChannels  Int?      @map("camera_channels")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([deviceModel])
+  @@index([status])
+  @@index([category])
+  @@map("device_inventory")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🚗 ENHANCED DEVICE MODEL (Supports both JC261 & VL502)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Device {
+  id              Int       @id @default(autoincrement())
+  imei            String    @unique
+  deviceName      String?   @map("device_name")
+  deviceModel     String    @default("JC261") @map("device_model")  // "JC261" or "VL502"
+  deviceType      String?   @map("device_type")                    // ✅ NEW: VL502 specific type
+  
+  // Status & Category
+  status          String    @default("inactive")
+  category        String    @default("Other") @map("device_category")
+  isActive        Boolean   @default(true) @map("is_active")
+  
+  // Vendor & Pricing
+  vendor          String?   @map("vendor_name")
+  unitPrice       Float?    @map("unit_price")
+  
+  // Assignment
+  companyName     String?   @map("company_name")
+  assignedToType  String?   @map("assigned_to_type")
+  assignedToId    Int?      @map("assigned_to_id")
+  assignedToName  String?   @map("assigned_to_name")
+  
+  // Activation & Connection
+  activationDate  DateTime? @map("activation_date")
+  lastSeen        DateTime? @map("last_seen")
+  ipAddress       String?   @map("ip_address")
+  serverIp        String?   @map("server_ip")
+  serverPort      Int?      @map("server_port")
+  
+  // SIM & Communication
+  simNumber       String?   @map("sim_number")
+  iccid           String?                                          // ✅ NEW: SIM ICCID
+  phoneNumber     String?   @map("phone_number")
+  
+  // Vehicle Information
+  driverName      String?   @map("driver_name")
+  numberPlate     String?   @map("number_plate")
+  vehicleNumber   String?   @map("vehicle_number")               // ✅ NEW: VL502 vehicle number
+  licensePlate    String?   @map("license_plate")                // ✅ NEW: License plate
+  licensePlateColor String? @map("license_plate_color")          // ✅ NEW: Plate color
+  vin             String?                                         // ✅ NEW: Vehicle VIN
+  vehicleType     String?   @map("vehicle_type")                 // ✅ NEW: Commercial/Passenger
+  
+  // Hardware
+  cameraChannels  Int?      @map("camera_channels")
+  
+  // VL502 Specific Fields
+  authCode        String?   @map("auth_code")                    // ✅ NEW: Authentication code
+  terminalSN      String?   @map("terminal_sn")                  // ✅ NEW: Terminal Serial Number
+  manufacturer    Int?                                            // ✅ NEW: Device manufacturer code
+  authLevel       Int?      @map("auth_level")                   // ✅ NEW: Authentication level
+  
+  // Firmware & Software
+  hardwareVersion String?   @map("hardware_version")             // ✅ NEW
+  firmwareVersion String?   @map("firmware_version")             // ✅ NEW
+  softwareVersion String?   @map("software_version")             // ✅ NEW
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  data            DeviceData[]
+  logs            DeviceLog[]
+  trackHistory    TrackHistory[]
+  vl502Locations  VL502Location[]
+  vl502OBDData    VL502OBDData[]
+  vl502Alarms     VL502Alarm[]
+  vl502Trips      VL502Trip[]
+  vl502DTCs       VL502TroubleCode[]
+  // ✅ FIX #7: Added missing relation arrays
+  vl502Emissions      VL502EmissionData[]
+  vl502VehicleStatus  VL502VehicleStatus[]
+  vl502Parameters     VL502Parameter[]
+  vl502EmergencyEvents VL502EmergencyEvent[]
+  vl502Commands       VL502Command[]
+
+  @@index([deviceModel])
+  @@index([status])
+  @@index([category])
+  @@index([assignedToType])
+  @@index([assignedToId])
+  @@index([simNumber])
+  @@index([phoneNumber])
+  @@index([imei])
+  @@index([vin])
+  @@map("devices")
+}
+
+model DeviceLog {
+  id        Int      @id @default(autoincrement())
+  deviceId  Int      @map("device_id")
+  eventType String   @map("event_type")
+  ipAddress String?  @map("ip_address")
+  timestamp DateTime @default(now())
+  details   String?  @db.Text
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([timestamp])
+  @@map("device_logs")
+}
+
+model DeviceData {
+  id             Int       @id @default(autoincrement())
+  deviceId       Int       @map("device_id")
+  
+  // Location Data
+  latitude       Float?
+  longitude      Float?
+  altitude       Float?
+  speed          Float?
+  azimuth        Float?                                 // Direction/Heading
+  
+  // Status
+  accStatus      Int?      @map("acc_status")
+  ignition       Boolean?  @default(false)
+  
+  // GPS Info
+  gnssType       String?   @map("gnss_type")
+  satellites     Int?      @default(0)
+  signalStrength String?   @map("signal_strength")
+  positionType   String?   @map("position_type")        // GPS/LBS/WIFI
+  
+  // Timestamps
+  positionTime   DateTime? @map("position_time")
+  receivedAt     DateTime  @default(now()) @map("received_at")
+  
+  // Additional
+  dataType       String?   @map("data_type")
+  coordinates    String?
+  address        String?   @db.Text
+  
+  device         Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([receivedAt])
+  @@index([positionTime])
+  @@map("device_data")
+}
+
+model TrackHistory {
+  id            Int      @id @default(autoincrement())
+  deviceId      Int      @map("device_id")
+  imei          String
+  startTime     DateTime @map("start_time")
+  endTime       DateTime @map("end_time")
+  totalDistance Float    @map("total_distance_km")
+  avgSpeed      Float    @map("avg_speed_kmh")
+  maxSpeed      Float?   @map("max_speed_kmh")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  device        Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([startTime, endTime])
+  @@map("track_history")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🚗 VL502 SPECIFIC MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 📍 VL502 Location Data (0x0200) - Enhanced GPS tracking
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502Location {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Location
+  latitude        Float
+  longitude       Float
+  altitude        Int?                                   // meters
+  speed           Float?                                 // km/h
+  direction       Int?                                   // 0-359 degrees
+  
+  // Status Flags (from 0x0200 status DWORD)
+  accOn           Boolean   @default(false) @map("acc_on")
+  positioned      Boolean   @default(true)
+  southLatitude   Boolean   @default(false) @map("south_latitude")
+  westLongitude   Boolean   @default(false) @map("west_longitude")
+  inOperation     Boolean   @default(true) @map("in_operation")
+  
+  // Door Status
+  doorLocked      Boolean?  @map("door_locked")
+  door1Open       Boolean?  @map("door_1_open")          // Front door
+  door2Open       Boolean?  @map("door_2_open")          // Middle door
+  door3Open       Boolean?  @map("door_3_open")          // Rear door
+  door4Open       Boolean?  @map("door_4_open")          // Driver door
+  door5Open       Boolean?  @map("door_5_open")          // Custom
+  
+  // Circuit Status
+  oilCircuitOk    Boolean?  @map("oil_circuit_ok")
+  electricCircuitOk Boolean? @map("electric_circuit_ok")
+  
+  // Load Status (00=empty, 01=half, 11=full)
+  loadStatus      Int?      @map("load_status")
+  
+  // Positioning Type (00=GNSS, 01=LBS, 10=INS)
+  positioningType Int?      @map("positioning_type")
+  
+  // Satellite Info
+  gpsSatellites   Boolean   @default(false) @map("gps_satellites")
+  bdSatellites    Boolean   @default(false) @map("bd_satellites")
+  glonassSatellites Boolean @default(false) @map("glonass_satellites")
+  galileoSatellites Boolean @default(false) @map("galileo_satellites")
+  satelliteCount  Int?      @map("satellite_count")
+  
+  // Additional Info
+  signalStrength  Int?      @map("signal_strength")
+  gpsMileage      Float?    @map("gps_mileage")          // km
+  ioStatus        String?   @map("io_status") @db.Text   // JSON: IO bits
+  baseStationData String?   @map("base_station_data") @db.Text // JSON: GSM/LTE data
+  
+  // Alarm Flag (from 0x0200 alarm DWORD)
+  alarmFlag       BigInt?   @map("alarm_flag")           // 32-bit alarm flags
+  
+  // Timestamps
+  timestamp       DateTime                               // Device timestamp
+  receivedAt      DateTime  @default(now()) @map("received_at")
+  
+  // Geocoding
+  address         String?   @db.Text
+  
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([timestamp])
+  @@index([receivedAt])
+  @@map("vl502_locations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔧 VL502 OBD Data (0x0900 - subcategory 0x01) - Engine & Vehicle Parameters
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502OBDData {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Event Info
+  eventTime       DateTime  @map("event_time")
+  dataType        Int       @map("data_type")            // 0=real-time, 1=re-upload
+  vehicleType     Int       @map("vehicle_type")         // 1=commercial, 2=passenger
+  
+  // Engine Basic
+  engineRpm       Int?      @map("engine_rpm")
+  engineLoad      Float?    @map("engine_load")          // %
+  engineTorque    Float?    @map("engine_torque")        // Nm
+  engineTorquePercent Float? @map("engine_torque_percent") // %
+  engineRunTime   Int?      @map("engine_run_time")      // seconds
+  timeSinceStart  Int?      @map("time_since_start")     // seconds
+  vehicleSpeed    Float?    @map("vehicle_speed")        // km/h
+  throttlePosition Float?   @map("throttle_position")    // %
+  acceleratorPosition Float? @map("accelerator_position") // %
+  
+  // Temperatures
+  coolantTemp     Float?    @map("coolant_temp")         // °C
+  oilTemp         Float?    @map("oil_temp")             // °C
+  fuelTemp        Float?    @map("fuel_temp")            // °C
+  intakeAirTemp   Float?    @map("intake_air_temp")      // °C
+  ambientTemp     Float?    @map("ambient_temp")         // °C
+  
+  // Electrical
+  batteryVoltage  Float?    @map("battery_voltage")      // V
+  alternatorVoltage Float?  @map("alternator_voltage")   // V
+  
+  // Pressures
+  oilPressure     Float?    @map("oil_pressure")         // kPa
+  intakePressure  Float?    @map("intake_pressure")      // kPa
+  barometricPressure Float? @map("barometric_pressure")  // kPa
+  
+  // Fuel System
+  fuelLevel       Float?    @map("fuel_level")           // %
+  fuelVolume      Float?    @map("fuel_volume")          // L
+  fuelConsumption Float?    @map("fuel_consumption")     // L
+  instantFuelRate Float?    @map("instant_fuel_rate")    // L/h
+  avgFuelEconomy  Float?    @map("avg_fuel_economy")     // L/100km
+  instantFuelEconomy Float? @map("instant_fuel_economy") // L/100km
+  totalFuelUsed   Float?    @map("total_fuel_used")      // L
+  
+  // Mileage
+  vehicleMileage  Float?    @map("vehicle_mileage")      // km
+  // ✅ FIX #1: Removed duplicate engineRpm, vehicleSpeed, acceleratorPosition fields
+  //            (already defined above in "Engine Basic" section)
+  
+  // Air System
+  intakeAirFlow   Float?    @map("intake_air_flow")      // g/s
+  mafRate         Float?    @map("maf_rate")             // kg/h
+  
+  // Transmission
+  gearPosition    String?   @map("gear_position")
+  clutchStatus    Boolean?  @map("clutch_status")
+  
+  // Location snapshot
+  latitude        Float?
+  longitude       Float?
+  
+  // Timestamps
+  timestamp       DateTime  @default(now())
+  
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([eventTime])
+  @@index([timestamp])
+  @@map("vl502_obd_data")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔧 VL502 SCR/Emission Data - Diesel emission system
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502EmissionData {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // SCR System
+  scrStatus       Boolean?  @map("scr_status")
+  scrInletTemp    Float?    @map("scr_inlet_temp")       // °C
+  scrOutletTemp   Float?    @map("scr_outlet_temp")      // °C
+  catalystTemp    Float?    @map("catalyst_temp")        // °C
+  
+  // NOx Sensors
+  noxInletConcentration  Float? @map("nox_inlet_concentration")  // ppm
+  noxOutletConcentration Float? @map("nox_outlet_concentration") // ppm
+  noxInletPower   String?   @map("nox_inlet_power")      // normal/abnormal
+  noxOutletPower  String?   @map("nox_outlet_power")
+  
+  // Urea System (DEF/AdBlue)
+  ureaLevel       Float?    @map("urea_level")           // %
+  ureaTemp        Float?    @map("urea_temp")            // °C
+  ureaInjectionRate Float?  @map("urea_injection_rate")  // ml/h
+  ureaPumpPressure Float?   @map("urea_pump_pressure")   // kPa
+  ureaPumpSpeed   Int?      @map("urea_pump_speed")      // rpm
+  totalUreaUsed   Float?    @map("total_urea_used")      // g
+  
+  // DPF (Diesel Particulate Filter)
+  dpfPressure     Float?    @map("dpf_pressure")         // kPa
+  dpfTemp         Float?    @map("dpf_temp")             // °C
+  sootMass        Float?    @map("soot_mass")            // g
+  
+  // Oxygen Sensors
+  o2FrontSensor   Float?    @map("o2_front_sensor")      // mV
+  o2RearSensor    Float?    @map("o2_rear_sensor")       // mV
+  
+  // Particulate Matter
+  pmConcentration Float?    @map("pm_concentration")     // mg/m³
+  opacity         Float?                                  // %
+  
+  // MIL (Malfunction Indicator Lamp)
+  milStatus       Boolean?  @map("mil_status")
+  
+  eventTime       DateTime  @map("event_time")
+  timestamp       DateTime  @default(now())
+  
+  // ✅ FIX #2: Added missing relation to Device
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([eventTime])
+  @@map("vl502_emission_data")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️ VL502 Alarms (0x0900 - subcategory 0x03) - 60+ alarm types
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502Alarm {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Alarm Info
+  alarmId         Int       @map("alarm_id")             // 0x00-0x3F
+  alarmName       String    @map("alarm_name")
+  alarmCategory   String    @map("alarm_category")       // "system"/"driving"/"safety"/"emission"
+  severity        String                                  // "low"/"medium"/"high"/"critical"
+  
+  // Description
+  description     String    @db.Text
+  detailDescription String? @map("detail_description") @db.Text
+  
+  // Location at alarm
+  latitude        Float?
+  longitude       Float?
+  
+  // Status
+  isActive        Boolean   @default(true) @map("is_active")
+  acknowledgedAt  DateTime? @map("acknowledged_at")
+  resolvedAt      DateTime? @map("resolved_at")
+  
+  // Timestamps
+  eventTime       DateTime  @map("event_time")
+  timestamp       DateTime  @default(now())
+  
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([alarmId])
+  @@index([alarmCategory])
+  @@index([severity])
+  @@index([isActive])
+  @@index([eventTime])
+  @@map("vl502_alarms")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🚗 VL502 Trip Data (0x0900 - subcategory 0x04)
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502Trip {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Trip Identification
+  tripNumber      Int       @map("trip_number")
+  tripProperty    Int       @map("trip_property")        // 1=start, 2=end
+  
+  // Timestamps
+  startTime       DateTime  @map("start_time")
+  endTime         DateTime? @map("end_time")
+  duration        Int?                                    // seconds
+  
+  // Location
+  startLatitude   Float?    @map("start_latitude")
+  startLongitude  Float?    @map("start_longitude")
+  endLatitude     Float?    @map("end_latitude")
+  endLongitude    Float?    @map("end_longitude")
+  
+  // Statistics
+  distance        Float?                                  // km
+  fuelConsumed    Float?    @map("fuel_consumed")        // L
+  idlingCount     Int?      @map("idling_count")
+  idlingTime      Int?      @map("idling_time")          // seconds
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([tripNumber])
+  @@index([startTime])
+  @@map("vl502_trips")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔧 VL502 Trouble Codes (DTCs) - (0x0900 - subcategory 0x02)
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502TroubleCode {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // DTC Info
+  systemId        BigInt    @map("system_id")            // ECM, ABS, SRS, etc.
+  systemName      String    @map("system_name")
+  dtcCode         String    @map("dtc_code")             // e.g., P0420, U0001
+  dtcDescription  String    @map("dtc_description") @db.Text
+  
+  // Status
+  isCurrent       Boolean   @default(true) @map("is_current") // Current vs historical
+  occurrenceCount Int       @default(1) @map("occurrence_count")
+  
+  // Location at fault
+  latitude        Float?
+  longitude       Float?
+  
+  // Timestamps
+  firstDetected   DateTime  @map("first_detected")
+  lastDetected    DateTime  @map("last_detected")
+  clearedAt       DateTime? @map("cleared_at")
+  
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([systemId])
+  @@index([dtcCode])
+  @@index([isCurrent])
+  @@index([firstDetected])
+  @@map("vl502_trouble_codes")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🚗 VL502 Vehicle Status - Doors, Windows, Lights, etc.
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502VehicleStatus {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Doors
+  driverDoor      String?   @map("driver_door")          // "open"/"closed"
+  passengerDoor   String?   @map("passenger_door")
+  rearLeftDoor    String?   @map("rear_left_door")
+  rearRightDoor   String?   @map("rear_right_door")
+  trunk           String?   @map("trunk")
+  
+  // Door Locks
+  allDoorsLocked  Boolean?  @map("all_doors_locked")
+  driverLock      Boolean?  @map("driver_lock")
+  passengerLock   Boolean?  @map("passenger_lock")
+  
+  // Windows
+  driverWindow    String?   @map("driver_window")        // "open"/"closed"
+  passengerWindow String?   @map("passenger_window")
+  rearLeftWindow  String?   @map("rear_left_window")
+  rearRightWindow String?   @map("rear_right_window")
+  sunroof         String?
+  
+  // Lights
+  headlights      Boolean?
+  highBeam        Boolean?  @map("high_beam")
+  lowBeam         Boolean?  @map("low_beam")
+  fogLights       Boolean?  @map("fog_lights")
+  leftTurnSignal  Boolean?  @map("left_turn_signal")
+  rightTurnSignal Boolean?  @map("right_turn_signal")
+  hazardLights    Boolean?  @map("hazard_lights")
+  
+  // Safety
+  seatBeltDriver  Boolean?  @map("seat_belt_driver")
+  seatBeltPassenger Boolean? @map("seat_belt_passenger")
+  airbagStatus    String?   @map("airbag_status")
+  
+  // Controls
+  accOn           Boolean?  @map("acc_on")
+  keyInserted     Boolean?  @map("key_inserted")
+  handbrake       Boolean?
+  footBrake       Boolean?  @map("foot_brake")
+  airConditioner  Boolean?  @map("air_conditioner")
+  wiper           Boolean?
+  
+  // Timestamps
+  timestamp       DateTime  @default(now())
+  
+  // ✅ FIX #3: Added missing relation to Device
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([timestamp])
+  @@map("vl502_vehicle_status")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 📊 VL502 Device Parameters (0xF000-0xFFFF)
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502Parameter {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Parameter Info
+  parameterId     String    @map("parameter_id")         // e.g., "0xF000"
+  parameterName   String    @map("parameter_name")
+  category        String                                  // "network"/"alarm"/"reporting"
+  
+  // Value
+  value           String    @db.Text                     // Can be any data type
+  dataType        String    @map("data_type")            // "BYTE"/"WORD"/"DWORD"/"STRING"
+  
+  // Timestamps
+  lastUpdated     DateTime  @map("last_updated") @default(now())
+  
+  // ✅ FIX #4: Added missing relation to Device
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, parameterId])
+  @@index([deviceId])
+  @@index([imei])
+  @@index([parameterId])
+  @@map("vl502_parameters")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🎬 VL502 Emergency Events (Collision/Rollover with high-frequency data)
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502EmergencyEvent {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Event Info
+  eventId         BigInt    @map("event_id")             // Unique event identifier
+  eventType       Int       @map("event_type")           // 51-58 (accel, brake, turn, collision, rollover)
+  eventName       String    @map("event_name")
+  
+  // Peak Acceleration
+  peakAcceleration Float    @map("peak_acceleration")    // m/s²
+  
+  // Event Timing
+  systemTime      DateTime  @map("system_time")          // Device timestamp
+  
+  // High-frequency data (14 seconds @ 20Hz = 280 samples)
+  accelerationData String   @map("acceleration_data") @db.LongText  // JSON: [{x, y, z, roll, pitch, yaw}]
+  gpsData         String    @map("gps_data") @db.Text              // JSON: GPS snapshots
+  canData         String?   @map("can_data") @db.Text              // JSON: Speed & RPM
+  
+  // Media files
+  fileName        String?   @map("file_name")
+  
+  // Additional data
+  collisionAngle  Float?    @map("collision_angle")      // degrees
+  collisionType   Int?      @map("collision_type")       // 1=active, 2=passive
+  collisionFactor Int?      @map("collision_factor")
+  
+  // Timestamps
+  timestamp       DateTime  @default(now())
+  
+  // ✅ FIX #5: Added missing relation to Device
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([eventId])
+  @@index([eventType])
+  @@index([systemTime])
+  @@map("vl502_emergency_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🌐 VL502 Command Log - Track commands sent to device
+// ─────────────────────────────────────────────────────────────────────────────
+model VL502Command {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @map("device_id")
+  imei            String
+  
+  // Command Info
+  commandId       String    @map("command_id")           // 0x8103, 0x8105, etc.
+  commandName     String    @map("command_name")
+  commandData     String    @map("command_data") @db.Text // Hex/JSON
+  
+  // Status
+  status          String    @default("pending")          // "pending"/"sent"/"acked"/"failed"
+  response        String?   @db.Text                     // Device response
+  
+  // Timestamps
+  sentAt          DateTime  @default(now()) @map("sent_at")
+  acknowledgedAt  DateTime? @map("acknowledged_at")
+  
+  // ✅ FIX #6: Added missing relation to Device
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([imei])
+  @@index([status])
+  @@index([sentAt])
+  @@map("vl502_commands")
 }

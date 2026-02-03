@@ -125,3 +125,4 @@ class AdminModel {
 }
 
 export default new AdminModel();
+
