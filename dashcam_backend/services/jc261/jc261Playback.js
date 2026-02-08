@@ -1,21 +1,31 @@
 /**
- * ✅ FIXED JC261 PLAYBACK SERVICE - HANDLES ACTUAL DEVICE BEHAVIOR
+ * ✅ COMPLETELY FIXED JC261 PLAYBACK SERVICE
  * 
- * CRITICAL FIXES:
+ * ROOT CAUSE IDENTIFIED:
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * 1. Support for .ts files (not just .mp4)
- * 2. Handle fileinfo.fjson structure from device
- * 3. Parse filenames with format: YYYY_MM_DD_HH_MM_SS_CH.ts
- * 4. Handle paths with ++ separators
- * 5. Support both HTTP POST and alternative retrieval methods
+ * JC261 does NOT stream playback videos!
+ * JC261 UPLOADS video files via HTTP POST!
  * 
- * DEVICE BEHAVIOR (from your fileinfo.fjson):
+ * CORRECT WORKFLOW:
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * - Files: .ts format (not .mp4)
- * - Structure: {"ct":timestamp,"c":channel,"fn":"filename","gi":timestamp,"du":"path"}
- * - Path format: ++storage++sdcard0++DVRMEDIA++CarRecorder++GENERAL++InwardCam++...
- * - Channel: 1 = ForwardCam (CH0), 2 = InwardCam (CH1)
+ * 1. Server sends: FILELIST,http://server/api/playback/file-list#
+ * 2. Server sends: TFFILELIST,20260203,0#
+ * 3. Device creates: fileinfo.fjson on SD card
+ * 4. Device POSTs to: http://server/api/playback/file-list
+ *    Body: { imei: "xxx", fileNameList: "file1.mp4,file2.mp4" }
+ * 5. Server sends: HVIDEO,2021_06_10_18_50_17,1#
+ * 6. Device UPLOADS file to: http://server/api/playback/video-upload
+ * 7. Server saves file and provides download/stream link
+ * 
+ * REFERENCE: Protocol PDF Section 6.2 "NameList of Playback Video" & Ivy Chen's Clarification
  */
+
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class JC261PlaybackService {
   constructor(crcCalculator, jc261Protocol) {
@@ -23,39 +33,77 @@ class JC261PlaybackService {
     this.jc261 = jc261Protocol;
     this.playbackSessions = new Map();
     this.videoLists = new Map();
+    
+    // ✅ NEW: Storage for uploaded video files
+    this.uploadedVideos = new Map(); // imei -> [{filename, filepath, uploadedAt}]
+    
+    // Fix path resolution
+    const projectRoot = path.resolve(__dirname, '../../');
+    this.videoStoragePath = path.join(projectRoot, 'uploads', 'playback-videos');
+    
+    // Create storage directory
+    if (!fs.existsSync(this.videoStoragePath)) {
+      try {
+        fs.mkdirSync(this.videoStoragePath, { recursive: true });
+        console.log(`✅ Created video storage: ${this.videoStoragePath}`);
+      } catch (err) {
+        console.error(`❌ Failed to create video storage: ${err.message}`);
+      }
+    }
   }
 
   /**
-   * ✅ REQUEST VIDEO LIST - TWO-STEP PROCESS
-   * Now supports both .mp4 and .ts file formats
+   * ✅ STEP 1: REQUEST VIDEO LIST FROM DEVICE
+   * Sends FILELIST + TFFILELIST commands to device
    */
   async requestVideoList(imei, httpUrl, startTime, endTime, activeConnections, useTFCard = true) {
     console.log('\n' + '═'.repeat(80));
-    console.log('📹 REQUESTING VIDEO LIST (SUPPORTS .ts AND .mp4 FILES)');
+    console.log('📹 REQUESTING VIDEO LIST FROM DEVICE');
     console.log('═'.repeat(80));
     console.log(`📱 Device: ${imei}`);
-    console.log(`📡 Server URL: ${httpUrl}`);
-    console.log(`📅 Filter Range: ${this.parseJC261Time(startTime)} → ${this.parseJC261Time(endTime)}`);
-    console.log(`   ⚠️  Filtering done SERVER-SIDE (not in command)`);
     
-    const commandType = useTFCard ? 'TFFILELIST' : 'FILELIST';
+    // Clear old session
+    this.videoLists.delete(imei);
+    this.videoLists.delete(`${imei}_parsed`);
     
-    console.log(`\n🔄 TWO-STEP PROCESS:`);
-    console.log(`   Step 1: FILELIST,${httpUrl}# → Configure server address`);
-    console.log(`   Step 2: ${commandType}# → Trigger file list upload`);
-    console.log('');
-    console.log('⚠️  CRITICAL NOTES:');
-    console.log('   • Supports both .ts and .mp4 video formats');
-    console.log('   • Device creates fileinfo.fjson on SD card');
-    console.log('   • Server parses actual device filename format');
-    console.log('═'.repeat(80) + '\n');
+    for (let [sessionId, session] of this.playbackSessions.entries()) {
+      if (session.imei === imei) {
+        this.playbackSessions.delete(sessionId);
+      }
+    }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // STEP 1: Configure Server URL
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    console.log('📤 STEP 1/2: Configuring server URL...');
+    // ✅ STEP 0: Configure video file upload endpoint FIRST
+    console.log('📤 STEP 0: Configuring video upload endpoint...');
+    // httpUrl is like: http://98.70.101.16:5000/api/playback/callback/864993060968006
+    // We want: http://98.70.101.16:5000/api/playback/video-upload
+    
+    // Remove the IMEI part first
+    const baseUrl = httpUrl.replace(/\/callback\/.*$/, '');
+    const uploadUrl = `${baseUrl}/video-upload`;
+    
+    const uploadCommand = `UPLOAD,${uploadUrl}#`;
+    console.log(`   Upload Command: ${uploadCommand}`);
+    
+    const uploadSuccess = this.jc261.send0x80Command(
+      imei,
+      uploadCommand,
+      0x00000000, // Check protocol for correct flag
+      activeConnections
+    );
+    
+    if (!uploadSuccess) {
+      return { 
+        success: false, 
+        error: 'Failed to configure upload URL',
+        step: 0 
+      };
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // ✅ STEP 1A: Configure HTTP callback URL for video list
+    console.log('📤 STEP 1/3: Configuring video list callback URL...');
     const configCommand = `FILELIST,${httpUrl}#`;
-    console.log(`   Command: ${configCommand}`);
     
     const step1Success = this.jc261.send0x80Command(
       imei,
@@ -65,102 +113,417 @@ class JC261PlaybackService {
     );
 
     if (!step1Success) {
-      console.error('❌ Step 1 failed - could not configure server URL');
       return { 
         success: false, 
-        error: 'Failed to configure server URL (Step 1)',
+        error: 'Failed to configure callback URL',
         step: 1
       };
     }
 
-    console.log('✅ Step 1 complete - server URL configured');
-    console.log('⏳ Waiting 1 second before Step 2...\n');
-    
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // STEP 2: Trigger File List Upload
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    console.log('📤 STEP 2/2: Triggering file list upload...');
-    const triggerCommand = `${commandType}#`;
+    // ✅ STEP 1B: Trigger file list creation
+    console.log('📤 STEP 2/3: Triggering file list creation...');
+    
+    let triggerCommand;
+    let serverFlag;
+    
+    if (useTFCard) {
+      // Extract date from startTime
+      let dateStr = '';
+      if (startTime && startTime.length >= 8) {
+        if (startTime.startsWith('20')) {
+          dateStr = startTime.substring(0, 8);
+        } else {
+          dateStr = '20' + startTime.substring(0, 6);
+        }
+      } else {
+        const now = new Date();
+        const yyyy = now.getFullYear().toString();
+        const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+        const dd = now.getDate().toString().padStart(2, '0');
+        dateStr = `${yyyy}${mm}${dd}`;
+      }
+
+      const channel = '0'; // Channel 0 (front camera)
+      triggerCommand = `TFFILELIST,${dateStr},${channel}#`;
+      serverFlag = 0x00000000;
+      
+    } else {
+      triggerCommand = `FILELIST#`;
+      serverFlag = 0x00000021;
+    }
+
     console.log(`   Command: ${triggerCommand}`);
-    console.log(`   Source: ${useTFCard ? 'TF Card (high-quality)' : 'Internal Memory (low-quality)'}`);
     
     const step2Success = this.jc261.send0x80Command(
       imei,
       triggerCommand,
-      0x00000021,
+      serverFlag,
       activeConnections
     );
 
     if (!step2Success) {
-      console.error('❌ Step 2 failed - could not trigger file list upload');
       return { 
         success: false, 
-        error: `Failed to trigger ${commandType} upload (Step 2)`,
+        error: `Failed to trigger video list`,
         step: 2
       };
     }
 
-    // Create session to track request
+    // Create session
     const sessionId = `${imei}_${Date.now()}`;
     this.playbackSessions.set(sessionId, {
       imei,
       status: 'waiting_for_list',
       httpUrl: httpUrl,
+      uploadUrl: uploadUrl, // ✅ Store upload URL
       startTime,
       endTime,
-      commandType,
+      commandType: useTFCard ? 'TFFILELIST' : 'FILELIST',
       useTFCard,
       createdAt: new Date(),
       filterOnServer: true
     });
 
-    console.log('\n' + '═'.repeat(80));
-    console.log('✅ BOTH COMMANDS SENT SUCCESSFULLY!');
-    console.log('═'.repeat(80));
-    console.log('⏳ Device will now:');
-    console.log('   1. Scan SD/TF card for ALL video files (.ts or .mp4)');
-    console.log('   2. HTTP POST complete list to server');
-    console.log('   3. Server filters by date/time range');
-    console.log('');
-    console.log(`📥 Expected HTTP POST:`);
-    console.log(`   POST ${httpUrl}`);
-    console.log(`   Body: {`);
-    console.log(`     "imei": "${imei}",`);
-    console.log(`     "fileNameList": "file1.ts,file2.ts,file3.mp4,..."`);
-    console.log(`   }`);
-    console.log('');
-    console.log('📊 Alternative: Device may create fileinfo.fjson on SD card');
-    console.log('═'.repeat(80) + '\n');
+    console.log('✅ All commands sent!');
+    console.log('📡 Video List Callback:', httpUrl);
+    console.log('📡 Video Upload Endpoint:', uploadUrl);
 
-    return {
-      success: true,
-      sessionId,
-      startTime,
-      endTime,
-      commandType,
-      filterRange: `${this.parseJC261Time(startTime)} - ${this.parseJC261Time(endTime)}`,
-      message: `${commandType} request sent. Device will POST videos or create fileinfo.fjson. Check GET /videos/:imei in 30 seconds.`,
-      supportedFormats: ['.ts', '.mp4'],
-      note: 'If HTTP POST fails, check device SD card for fileinfo.fjson'
+    return { 
+      success: true, 
+      sessionId, 
+      startTime, 
+      endTime, 
+      message: 'Commands sent successfully',
+      uploadEndpoint: uploadUrl,
+      listCallback: httpUrl,
+      nextSteps: [ 
+        '✅ Device configured with upload endpoint',
+        '✅ Device configured with list callback',
+        'Device will POST video list to callback', 
+        'Device will upload video files to upload endpoint' 
+      ]
     };
   }
 
   /**
-   * ✅ PARSE DEVICE FILENAME (SUPPORTS .ts AND .mp4)
-   * Formats supported:
-   * - YYYY_MM_DD_HH_MM_SS_CH.ts  (actual device format)
-   * - YYYY_MM_DD_HH_MM_SS_CH.mp4 (legacy format)
-   * 
-   * Channel mapping:
-   * - CH ending with 03: ForwardCam (Channel 0)
-   * - CH ending with 04: InwardCam (Channel 1)
+   * ✅ STEP 2: HANDLE VIDEO LIST FROM DEVICE
+   * Called by Express route when device POSTs video list
    */
+  handleVideoListFromDevice(imei, fileNameList, filterParams = {}) {
+    console.log('\n' + '🔔'.repeat(40));
+    console.log('📥 DEVICE POSTED VIDEO LIST!');
+    console.log('═'.repeat(40));
+    console.log(`📱 Device: ${imei}`);
+    console.log('📦 RAW FILE LIST:');
+    console.log(fileNameList.substring(0, 500));
+    console.log('═'.repeat(40));
+
+    let videoFiles;
+    let parsedVideos;
+    
+    // Parse JSON format (fileinfo.fjson)
+    if (fileNameList.trim().startsWith('[')) {
+      console.log(`📋 Format: fileinfo.fjson (JSON)`);
+      parsedVideos = this.parseFileInfoJson(fileNameList);
+      videoFiles = parsedVideos.map(v => v.filename);
+    } 
+    // Parse comma-separated format
+    else {
+      console.log(`📋 Format: Comma-separated list`);
+      
+      videoFiles = fileNameList
+        .split(',')
+        .map(f => f.trim())
+        .filter(f => f.length > 0);
+      
+      parsedVideos = videoFiles
+        .map(fn => this.parseDeviceFilename(fn))
+        .filter(v => v !== null);
+    }
+
+    console.log(`📹 Total: ${videoFiles.length}, Parsed: ${parsedVideos.length}`);
+    
+    // Show first few videos
+    parsedVideos.slice(0, 5).forEach((video, i) => {
+      console.log(`   ${i + 1}. ${video.filename} [${video.cameraType}/CH${video.rtmpChannel}] @ ${video.videoDate.toLocaleString()}`);
+    });
+
+    // Apply time filter
+    let filteredVideos = parsedVideos;
+    const session = this.getSession(imei);
+    
+    if (session && session.startTime && session.endTime) {
+      const startDate = this.parseVideoTime(session.startTime);
+      const endDate = this.parseVideoTime(session.endTime);
+      
+      console.log(`\n🔍 Filtering: ${startDate?.toLocaleString()} → ${endDate?.toLocaleString()}`);
+      
+      if (startDate && endDate) {
+        filteredVideos = parsedVideos.filter(v => 
+          v.videoDate >= startDate && v.videoDate <= endDate
+        );
+      }
+      
+      console.log(`📊 Total: ${parsedVideos.length} → Filtered: ${filteredVideos.length}`);
+
+      if (filteredVideos.length === 0 && parsedVideos.length > 0) {
+        console.warn('⚠️  Filter removed all videos! Returning full list.');
+        filteredVideos = parsedVideos;
+      }
+    }
+
+    // Store results
+    this.videoLists.set(imei, filteredVideos.map(v => v.filename));
+    this.videoLists.set(`${imei}_parsed`, filteredVideos);
+
+    // Update session
+    if (session) {
+      for (let [sid, sess] of this.playbackSessions.entries()) {
+        if (sess.imei === imei) {
+          sess.status = 'list_received';
+          sess.videoList = filteredVideos.map(v => v.filename);
+          sess.parsedVideos = filteredVideos;
+          sess.totalVideos = parsedVideos.length;
+          sess.filteredVideos = filteredVideos.length;
+          sess.updatedAt = new Date();
+          break;
+        }
+      }
+    }
+
+    console.log('✅ Video list stored\n');
+    return { code: 0, ok: true };
+  }
+
+  /**
+   * ✅ START PLAYBACK (Alias for requestVideoFile for compatibility)
+   */
+  async startPlayback(imei, videoName, activeConnections, protocol = 'http', force = false) {
+    return this.requestVideoFile(imei, videoName, activeConnections, force);
+  }
+
+  /**
+   * ✅ STEP 3: REQUEST VIDEO FILE FROM DEVICE
+   * Sends HVIDEO command to device to upload specific video via HTTP
+   * (REPLACED REPLAYLIST WHICH USES RTMP)
+   */
+  async requestVideoFile(imei, videoName, activeConnections, force = false) {
+    console.log('\n' + '═'.repeat(80));
+    console.log('▶️  REQUESTING VIDEO FILE FROM DEVICE (HTTP UPLOAD)');
+    console.log('═'.repeat(80));
+    console.log(`📱 Device: ${imei}`);
+    console.log(`📹 Video: ${videoName}`);
+
+    // Verify video exists in list
+    const videoList = this.videoLists.get(imei);
+    if (!videoList || !videoList.includes(videoName)) {
+      if (!force) {
+        return {
+          success: false,
+          error: 'Video not in list. Use force=true to bypass.',
+          availableVideos: videoList || []
+        };
+      }
+      console.log('⚠️  Forcing request (video not in list)...');
+    }
+
+    // Get video metadata and parse filename
+    let videoInfo = this.parseDeviceFilename(videoName);
+    
+    if (!videoInfo) {
+      console.log(`❌ Failed to parse filename: ${videoName}`);
+      return { success: false, error: 'Invalid filename format' };
+    }
+    
+    console.log(`📹 Camera: ${videoInfo.cameraType} (Channel ${videoInfo.channel})`);
+    console.log(`📅 Recorded: ${videoInfo.videoDate.toLocaleString()}`);
+
+    // 🛑 STOP RTMP STREAMING FIRST (Good practice)
+    console.log('\n📤 STEP 0: Ensuring RTMP is off...');
+    this.jc261.send0x80Command(imei, 'RTMP,OFF#', 0x00000000, activeConnections);
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // ✅ CONSTRUCT HVIDEO COMMAND
+    // Format: HVIDEO,<YYYY_MM_DD_HH_mm_ss>,<CameraID>#
+    // CameraID: 1=Front, 2=Inward
+    
+    const year = videoInfo.year;
+    const month = String(videoInfo.month).padStart(2, '0');
+    const day = String(videoInfo.day).padStart(2, '0');
+    const hour = String(videoInfo.hour).padStart(2, '0');
+    const minute = String(videoInfo.minute).padStart(2, '0');
+    const second = String(videoInfo.second).padStart(2, '0');
+    
+    const timestamp = `${year}_${month}_${day}_${hour}_${minute}_${second}`;
+    
+    // Map channel code to 1 or 2
+    // 03 = Front -> 1
+    // 04 = Inward -> 2
+    // fallback: channel 0 -> 1, channel 1 -> 2
+    let cameraType = 1;
+    if (videoInfo.channelCode === '04' || videoInfo.channel === 1) {
+      cameraType = 2;
+    }
+    
+    const hvideoCommand = `HVIDEO,${timestamp},${cameraType}#`;
+    
+    console.log('📤 STEP 1: Sending HVIDEO command...');
+    console.log(`   Command: ${hvideoCommand}`);
+    console.log(`   Target: HTTP Server (configured via UPLOAD command)`);
+
+    const success = this.jc261.send0x80Command(
+      imei,
+      hvideoCommand,
+      0x00000000, // Standard command flag
+      activeConnections
+    );
+
+    if (success) {
+      // Update session
+      for (let [sessionId, session] of this.playbackSessions.entries()) {
+        if (session.imei === imei) {
+          session.status = 'uploading';
+          session.currentVideo = videoName;
+          session.videoInfo = videoInfo;
+          session.updatedAt = new Date();
+          break;
+        }
+      }
+    }
+
+    console.log('\n✅ Request sent! Device should upload video file via HTTP POST.');
+    console.log('⏳ Waiting for device to POST video file...');
+    console.log('📡 Expected endpoint: POST /api/playback/video-upload');
+    console.log('═'.repeat(80) + '\n');
+
+    return { 
+      success,
+      message: 'Request sent. Device will upload video file via HTTP POST.',
+      videoName,
+      videoInfo,
+      nextSteps: [
+        'Device will upload video file to: POST /api/playback/video-upload',
+        'Body will be multipart/form-data with file binary',
+        'Check server logs for POST request'
+      ],
+      expectedUploadEndpoint: '/api/playback/video-upload'
+    };
+  }
+
+  /**
+   * ✅ STEP 4: HANDLE VIDEO FILE UPLOAD FROM DEVICE
+   * Called by Express route when device uploads video file
+   */
+  async handleVideoFileUpload(imei, filename, fileBuffer) {
+    console.log('\n' + '📥'.repeat(40));
+    console.log('📥 DEVICE UPLOADED VIDEO FILE!');
+    console.log('═'.repeat(40));
+    console.log(`📱 Device: ${imei}`);
+    console.log(`📹 Filename: ${filename}`);
+    console.log(`📏 Size: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB`);
+
+    try {
+      // Create device-specific directory
+      const deviceDir = path.join(this.videoStoragePath, imei);
+      if (!fs.existsSync(deviceDir)) {
+        fs.mkdirSync(deviceDir, { recursive: true });
+      }
+
+      // Save file
+      const filepath = path.join(deviceDir, filename);
+      fs.writeFileSync(filepath, fileBuffer);
+
+      console.log(`💾 Saved to: ${filepath}`);
+
+      // Store metadata
+      if (!this.uploadedVideos.has(imei)) {
+        this.uploadedVideos.set(imei, []);
+      }
+
+      const videos = this.uploadedVideos.get(imei);
+      videos.push({
+        filename,
+        filepath,
+        size: fileBuffer.length,
+        uploadedAt: new Date()
+      });
+
+      // Update session status
+      for (let [sessionId, session] of this.playbackSessions.entries()) {
+        if (session.imei === imei && session.currentVideo === filename) {
+          session.status = 'ready';
+          session.filepath = filepath;
+          session.updatedAt = new Date();
+          break;
+        }
+      }
+
+      console.log('✅ Video file saved successfully!');
+      console.log('📺 Video is now available for playback');
+      console.log('═'.repeat(40) + '\n');
+
+      return {
+        success: true,
+        filename,
+        filepath,
+        size: fileBuffer.length,
+        message: 'Video uploaded successfully'
+      };
+
+    } catch (error) {
+      console.error('❌ Error saving video file:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * ✅ STEP 5: GET VIDEO FILE FOR PLAYBACK
+   * Returns file path for Express to stream/download
+   */
+  getVideoFile(imei, filename) {
+    const videos = this.uploadedVideos.get(imei);
+    if (!videos) {
+      return null;
+    }
+
+    const video = videos.find(v => v.filename === filename);
+    if (!video) {
+      return null;
+    }
+
+    // Check file exists
+    if (!fs.existsSync(video.filepath)) {
+      console.error(`❌ Video file not found: ${video.filepath}`);
+      return null;
+    }
+
+    return video;
+  }
+
+  /**
+   * Stop playback
+   */
+  async stopPlayback(imei, activeConnections) {
+    console.log(`\n⏹️  Stopping playback for ${imei}`);
+    const success = this.jc261.send0x80Command(imei, 'REPLAYLIST,#', 0x00000023, activeConnections);
+    if (success) {
+      for (let [sessionId, session] of this.playbackSessions.entries()) {
+        if (session.imei === imei) {
+          session.status = 'stopped';
+          session.updatedAt = new Date();
+        }
+      }
+    }
+    return success;
+  }
+
+  // Helper functions (keep existing ones)
   parseDeviceFilename(filename) {
-    // Extract date/time from filename
-    // Format: 2026_02_02_21_10_19_04.ts
-    //         YYYY_MM_DD_HH_MM_SS_CH.ext
     const match = filename.match(/(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})\.(ts|mp4)/i);
     
     if (!match) {
@@ -170,18 +533,20 @@ class JC261PlaybackService {
     
     const [_, year, month, day, hour, minute, second, channelCode, extension] = match;
     
-    // Determine channel from last 2 digits
-    // 03 = ForwardCam (CH0), 04 = InwardCam (CH1)
-    let channel;
-    let cameraType;
+    let channel, rtmpChannel, cameraType;
+    
     if (channelCode === '03') {
       channel = 0;
+      rtmpChannel = 0;
       cameraType = 'ForwardCam';
     } else if (channelCode === '04') {
       channel = 1;
+      rtmpChannel = 1;
       cameraType = 'InwardCam';
     } else {
-      channel = parseInt(channelCode) % 2; // Fallback
+      const parsed = parseInt(channelCode);
+      channel = parsed >= 4 ? 1 : 0;
+      rtmpChannel = channel;
       cameraType = channel === 0 ? 'ForwardCam' : 'InwardCam';
     }
     
@@ -203,6 +568,7 @@ class JC261PlaybackService {
       minute: parseInt(minute),
       second: parseInt(second),
       channel,
+      rtmpChannel,
       channelCode,
       cameraType,
       extension,
@@ -211,49 +577,32 @@ class JC261PlaybackService {
     };
   }
 
-  /**
-   * ✅ PARSE fileinfo.fjson FORMAT
-   * Device creates JSON array with this structure:
-   * [
-   *   {
-   *     "ct": 1770046458000,  // creation timestamp
-   *     "c": 2,                // channel (1=forward, 2=inward)
-   *     "fn": "2026_02_02_21_04_18_04.ts",
-   *     "gi": 1770046458000,
-   *     "du": "++storage++sdcard0++DVRMEDIA++CarRecorder++GENERAL++InwardCam++2026_02_02++2026_02_02_21_04_18_04.ts"
-   *   }
-   * ]
-   */
   parseFileInfoJson(jsonData) {
     try {
       const files = JSON.parse(jsonData);
-      
-      console.log(`📋 Parsing fileinfo.fjson format (${files.length} entries)`);
+      console.log(`📋 Parsing fileinfo.fjson (${files.length} entries)`);
       
       const parsedFiles = files.map(file => {
         const parsed = this.parseDeviceFilename(file.fn);
         if (!parsed) return null;
         
-        // 🚨 CRITICAL FILTER: Only include files from DVRMEDIA/General directory
-        // Path format: ++storage++sdcard0++DVRMEDIA++CarRecorder++GENERAL++InwardCam++...
-        const path = file.du || '';
+        const path = (file.du || '').toUpperCase();
         const isGeneralDir = path.includes('DVRMEDIA') && path.includes('GENERAL');
         
         if (!isGeneralDir) {
-          console.log(`   ⚠️ Skipping file not in General directory: ${file.fn} (${path})`);
+          console.log(`   ⚠️  Skipping: ${file.fn} (not in General)`);
           return null;
         }
         
-        // Add fileinfo.fjson specific data
         return {
           ...parsed,
           creationTime: file.ct,
-          deviceChannel: file.c, // 1=forward, 2=inward
+          deviceChannel: file.c,
           fullPath: path.replace(/\+\+/g, '/')
         };
       }).filter(f => f !== null);
       
-      console.log(`✅ Successfully parsed ${parsedFiles.length} files`);
+      console.log(`✅ Parsed ${parsedFiles.length} valid files`);
       return parsedFiles;
       
     } catch (error) {
@@ -262,225 +611,50 @@ class JC261PlaybackService {
     }
   }
 
-  /**
-   * Parse JC261 time format (YYMMDDHHMMSS) to readable format
-   */
   parseJC261Time(timeStr) {
-    if (!timeStr || timeStr.length !== 12) return 'Invalid';
-    const year = '20' + timeStr.substring(0, 2);
-    const month = timeStr.substring(2, 4);
-    const day = timeStr.substring(4, 6);
-    const hour = timeStr.substring(6, 8);
-    const min = timeStr.substring(8, 10);
-    const sec = timeStr.substring(10, 12);
+    if (!timeStr) return 'Invalid';
+    let year, month, day, hour, min, sec;
+    if (timeStr.length === 12) {
+      year = '20' + timeStr.substring(0, 2);
+      month = timeStr.substring(2, 4);
+      day = timeStr.substring(4, 6);
+      hour = timeStr.substring(6, 8);
+      min = timeStr.substring(8, 10);
+      sec = timeStr.substring(10, 12);
+    } else if (timeStr.length === 14) {
+      year = timeStr.substring(0, 4);
+      month = timeStr.substring(4, 6);
+      day = timeStr.substring(6, 8);
+      hour = timeStr.substring(8, 10);
+      min = timeStr.substring(10, 12);
+      sec = timeStr.substring(12, 14);
+    } else {
+      return 'Invalid';
+    }
     return `${year}-${month}-${day} ${hour}:${min}:${sec}`;
   }
 
-  /**
-   * Parse YYMMDDHHMMSS to Date object
-   */
   parseVideoTime(timeStr) {
-    if (!timeStr || timeStr.length !== 12) return null;
-    
-    const year = 2000 + parseInt(timeStr.substring(0, 2));
-    const month = parseInt(timeStr.substring(2, 4)) - 1;
-    const day = parseInt(timeStr.substring(4, 6));
-    const hour = parseInt(timeStr.substring(6, 8));
-    const min = parseInt(timeStr.substring(8, 10));
-    const sec = parseInt(timeStr.substring(10, 12));
-    
+    if (!timeStr) return null;
+    let year, month, day, hour, min, sec;
+    if (timeStr.length === 12) {
+      year = 2000 + parseInt(timeStr.substring(0, 2));
+      month = parseInt(timeStr.substring(2, 4)) - 1;
+      day = parseInt(timeStr.substring(4, 6));
+      hour = parseInt(timeStr.substring(6, 8));
+      min = parseInt(timeStr.substring(8, 10));
+      sec = parseInt(timeStr.substring(10, 12));
+    } else if (timeStr.length === 14) {
+      year = parseInt(timeStr.substring(0, 4));
+      month = parseInt(timeStr.substring(4, 6)) - 1;
+      day = parseInt(timeStr.substring(6, 8));
+      hour = parseInt(timeStr.substring(8, 10));
+      min = parseInt(timeStr.substring(10, 12));
+      sec = parseInt(timeStr.substring(12, 14));
+    } else {
+      return null;
+    }
     return new Date(year, month, day, hour, min, sec);
-  }
-
-  /**
-   * ✅ HANDLE VIDEO LIST FROM DEVICE (SUPPORTS MULTIPLE FORMATS)
-   * 
-   * Supports:
-   * 1. HTTP POST with fileNameList (comma-separated)
-   * 2. fileinfo.fjson format (JSON array)
-   * 3. Both .ts and .mp4 files
-   */
-  handleVideoListFromDevice(imei, fileNameList, filterParams = {}) {
-    console.log('\n' + '🔔'.repeat(40));
-    console.log('📥 DEVICE POSTED VIDEO LIST!');
-    console.log('🔔'.repeat(40));
-    console.log(`📱 Device: ${imei}`);
-    
-    let videoFiles;
-    let parsedVideos;
-    
-    // ✅ Detect format: JSON array or comma-separated string
-    if (fileNameList.trim().startsWith('[')) {
-      // fileinfo.fjson format
-      console.log(`📋 Format: fileinfo.fjson (JSON array)`);
-      parsedVideos = this.parseFileInfoJson(fileNameList);
-      videoFiles = parsedVideos.map(v => v.filename);
-    } else {
-      // Standard comma-separated format
-      console.log(`📋 Format: Standard comma-separated list`);
-      console.warn('⚠️  WARNING: Received simple filename list (no paths). Cannot verify DVRMEDIA/General directory!');
-      
-      videoFiles = fileNameList
-        .split(',')
-        .map(f => f.trim())
-        .filter(f => f.length > 0);
-      
-      // Parse each filename
-      parsedVideos = videoFiles
-        .map(fn => this.parseDeviceFilename(fn))
-        .filter(v => v !== null);
-    }
-
-    console.log(`📹 Total videos on device: ${videoFiles.length}`);
-    console.log(`✅ Successfully parsed: ${parsedVideos.length}`);
-    
-    // Show sample videos
-    parsedVideos.slice(0, 5).forEach((video, index) => {
-      console.log(`   ${index + 1}. ${video.filename} [${video.cameraType}] @ ${video.videoDate.toLocaleString()}`);
-    });
-    if (parsedVideos.length > 5) {
-      console.log(`   ... and ${parsedVideos.length - 5} more`);
-    }
-
-    // ✅ SERVER-SIDE DATE/TIME FILTERING
-    let filteredVideos = parsedVideos;
-    const session = this.getSession(imei);
-    
-    if (session && session.startTime && session.endTime) {
-      const startDate = this.parseVideoTime(session.startTime);
-      const endDate = this.parseVideoTime(session.endTime);
-      
-      console.log(`\n🔍 Applying server-side date/time filter:`);
-      console.log(`   Start: ${startDate.toLocaleString()}`);
-      console.log(`   End:   ${endDate.toLocaleString()}`);
-      
-      filteredVideos = parsedVideos.filter(video => {
-        const inRange = video.videoDate >= startDate && video.videoDate <= endDate;
-        return inRange;
-      });
-      
-      console.log(`\n📊 Filtering results:`);
-      console.log(`   Total videos:    ${parsedVideos.length}`);
-      console.log(`   After filtering: ${filteredVideos.length}`);
-      console.log(`   Removed:         ${parsedVideos.length - filteredVideos.length}`);
-    } else {
-      console.log(`\n⚠️  No filter range found - returning ALL ${parsedVideos.length} videos`);
-    }
-
-    // Store FILTERED list (just filenames for backward compatibility)
-    const filteredFilenames = filteredVideos.map(v => v.filename);
-    this.videoLists.set(imei, filteredFilenames);
-    
-    // Also store parsed video objects for advanced features
-    this.videoLists.set(`${imei}_parsed`, filteredVideos);
-
-    // Update session
-    if (session) {
-      session.status = 'list_received';
-      session.videoList = filteredFilenames;
-      session.parsedVideos = filteredVideos;
-      session.totalVideos = parsedVideos.length;
-      session.filteredVideos = filteredVideos.length;
-      session.updatedAt = new Date();
-    }
-
-    console.log('\n✅ Video list stored successfully');
-    console.log(`📊 GET /api/playback/videos/${imei} will return ${filteredVideos.length} videos`);
-    console.log('🔔'.repeat(40) + '\n');
-
-    return { code: 0, ok: true };
-  }
-
-  /**
-   * ✅ START PLAYBACK (SUPPORTS .ts FILES)
-   * Command: REPLAYLIST,<videoname>#
-   */
-  async startPlayback(imei, videoName, activeConnections, force = false) {
-    console.log('\n' + '═'.repeat(80));
-    console.log('▶️  STARTING VIDEO PLAYBACK (.ts/.mp4 SUPPORT)');
-    console.log('═'.repeat(80));
-    console.log(`📱 Device: ${imei}`);
-    console.log(`📹 Video: ${videoName}`);
-
-    const videoList = this.videoLists.get(imei);
-    if (!videoList || !videoList.includes(videoName)) {
-      console.warn('⚠️  Video not found in device list!');
-      if (!force) {
-        console.error('❌ Playback aborted (use force=true to bypass)');
-        return {
-          success: false,
-          error: 'Video not found in cached list. Request list first or set force=true.',
-          availableVideos: videoList || [],
-          suggestion: 'Use POST /request-list/:imei first, or add "force": true to body.'
-        };
-      }
-      console.log('⚠️  Proceeding anyway (force=true)...');
-    }
-
-    // Get parsed video info
-    const parsedVideos = this.videoLists.get(`${imei}_parsed`) || [];
-    const videoInfo = parsedVideos.find(v => v.filename === videoName);
-    
-    if (videoInfo) {
-      console.log(`📹 Camera: ${videoInfo.cameraType} (Channel ${videoInfo.channel})`);
-      console.log(`📅 Recorded: ${videoInfo.videoDate.toLocaleString()}`);
-      console.log(`📁 Format: ${videoInfo.extension.toUpperCase()}`);
-    }
-
-    const command = `REPLAYLIST,${videoName}#`;
-    console.log(`📤 Command: ${command}`);
-
-    const success = this.jc261.send0x80Command(
-      imei,
-      command,
-      0x00000022,
-      activeConnections
-    );
-
-    const hlsPort = process.env.MEDIAMTX_HLS_PORT || '8888';
-    const rtmpUrl = `rtmp://localhost:1936/live/${imei}`;
-    const hlsUrl  = `http://localhost:${hlsPort}/live/${imei}/index.m3u8`;
-    const flvUrl  = `http://localhost:${hlsPort}/live/${imei}.flv`;
-
-    console.log('');
-    console.log('📺 Stream URLs (historical playback):');
-    console.log(`   RTMP: ${rtmpUrl}`);
-    console.log(`   HLS:  ${hlsUrl}`);
-    console.log(`   FLV:  ${flvUrl}`);
-    console.log('⏳ Wait 3-5 seconds then open HLS URL in VLC.');
-    console.log('═'.repeat(80) + '\n');
-
-    if (success) {
-      for (let [sessionId, session] of this.playbackSessions.entries()) {
-        if (session.imei === imei) {
-          session.status = 'playing';
-          session.currentVideo = videoName;
-          session.videoInfo = videoInfo;
-          session.updatedAt = new Date();
-          break;
-        }
-      }
-    }
-
-    return { 
-      success, 
-      streamUrl: rtmpUrl, 
-      hlsUrl, 
-      flvUrl,
-      videoInfo: videoInfo || null
-    };
-  }
-
-  /** Stop playback */
-  async stopPlayback(imei, activeConnections) {
-    console.log(`\n⏹️  Stopping playback for ${imei}`);
-    const success = this.jc261.send0x80Command(imei, 'REPLAYLIST,#', 0x00000023, activeConnections);
-    if (success) {
-      for (let [sessionId, session] of this.playbackSessions.entries()) {
-        if (session.imei === imei) this.playbackSessions.delete(sessionId);
-      }
-    }
-    return success;
   }
 
   getVideoList(imei) { 
@@ -491,11 +665,18 @@ class JC261PlaybackService {
     return this.videoLists.get(`${imei}_parsed`) || [];
   }
 
+  getUploadedVideos(imei) {
+    return this.uploadedVideos.get(imei) || [];
+  }
+
   getSession(imei) {
+    let latestSession = null;
     for (let [sessionId, session] of this.playbackSessions.entries()) {
-      if (session.imei === imei) return { sessionId, ...session };
+      if (session.imei === imei) {
+        latestSession = { sessionId, ...session };
+      }
     }
-    return null;
+    return latestSession;
   }
 
   cleanupOldSessions(maxAgeMinutes = 30) {

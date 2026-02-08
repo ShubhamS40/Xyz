@@ -420,17 +420,15 @@ class JC261Protocol {
    * - 'INOUT'       : BOTH cameras (CH0 + CH1) ✅✅ DEFAULT ✅✅
    * - undefined/null: BOTH cameras (CH0 + CH1) ✅✅ DEFAULT ✅✅
    */
-  startRTMPStream(imei, rtmpUrl = null, cameraIndex = 'INOUT', durationMinutes = 15, activeConnections) {
+ startRTMPStream(imei, rtmpUrl = null, cameraIndex = 'INOUT', durationMinutes = 15, activeConnections) {
     console.log('\n' + '═'.repeat(80));
     console.log('🎬 JC261 RTMP STREAM START');
     console.log('═'.repeat(80));
     console.log(`📱 IMEI: ${imei}`);
     
-    // ✅ KEY FIX: Determine camera mode with INOUT as default
     let cameraMode;
     let cameraDescription;
     
-    // Handle explicit single camera requests
     if (cameraIndex === 0 || cameraIndex === '0' || 
         cameraIndex === 'out' || cameraIndex === 'OUT') {
       cameraMode = 'OUT';
@@ -443,7 +441,6 @@ class JC261Protocol {
       cameraDescription = '📹 Camera 1 ONLY (cabin/driver)';
       console.warn('⚠️  WARNING: Single camera mode requested - only CH1');
     } 
-    // ✅ DEFAULT: BOTH CAMERAS (this covers undefined, null, 'INOUT', 'inout', etc.)
     else {
       cameraMode = 'INOUT';
       cameraDescription = '📹📹 BOTH CAMERAS (CH0 + CH1)';
@@ -463,8 +460,9 @@ class JC261Protocol {
 
     return new Promise((resolve) => {
       try {
-        const publicRtmpHost = process.env.RTMP_PUBLIC_HOST || '159.223.171.199';
-        const publicRtmpPort = process.env.RTMP_PUBLIC_PORT || '41378';
+        // ✅ FIX: Use correct RTMP port
+        const publicRtmpHost = process.env.RTMP_PUBLIC_HOST || '98.70.101.16';
+        const publicRtmpPort = process.env.RTMP_PUBLIC_PORT || '1935'; // FIXED!
         
         const rtmpBaseUrl = rtmpUrl || `rtmp://${publicRtmpHost}:${publicRtmpPort}/live`;
         const cleanUrl = rtmpBaseUrl.endsWith('#') ? rtmpBaseUrl.slice(0, -1) : rtmpBaseUrl;
@@ -472,6 +470,7 @@ class JC261Protocol {
         const rserviceCommand = `RSERVICE,${cleanUrl}#`;
         
         console.log(`🔗 RTMP Base: ${cleanUrl}`);
+        console.log(`📡 Full Command: ${rserviceCommand}`);
         
         if (cameraMode === 'INOUT') {
           console.log(`📝 Device will create TWO streams:`);
@@ -489,7 +488,7 @@ class JC261Protocol {
         const run = () => {
           step++;
           
-          // Step 1: Optional COREKITSW,0#
+          // Step 1: COREKITSW (optional)
           if (step === 1) {
             if (process.env.COREKITSW_BEFORE_RSERVICE !== '0') {
               console.log('📤 STEP 1/3: COREKITSW,0#');
@@ -508,16 +507,12 @@ class JC261Protocol {
             return;
           }
           
-          // Step 3: RTMP command (critical for camera selection)
+          // Step 3: RTMP command
           const dur = Math.max(2, Math.min(180, Number(durationMinutes) || 15));
           const rtmpCommand = `RTMP,ON,${cameraMode},${dur}#`;
           
           console.log(`📤 STEP ${process.env.COREKITSW_BEFORE_RSERVICE !== '0' ? '3/3' : '2/2'}: ${rtmpCommand}`);
-          console.log(`   🎥 Mode: ${cameraMode} (${
-            cameraMode === 'INOUT' ? 'Both cameras CH0+CH1' : 
-            cameraMode === 'OUT' ? 'Front camera CH0 only' : 
-            'Cabin camera CH1 only'
-          })`);
+          console.log(`   🎥 Mode: ${cameraMode}`);
           
           try {
             this.send0x80Command(imei, rtmpCommand, 0x00000002, activeConnections);
@@ -527,20 +522,15 @@ class JC261Protocol {
             console.log('═'.repeat(80));
             
             if (cameraMode === 'INOUT') {
-              console.log(`📺 Device will push BOTH streams to:`);
-              console.log(`   📹 Front (CH0): ${cleanUrl}/0/${imei}`);
-              console.log(`   📹 Cabin (CH1): ${cleanUrl}/1/${imei}`);
-              console.log(`\n👁️  Watch BOTH cameras at:`);
-              console.log(`   🌐 Front: http://localhost:8888/live/0/${imei}`);
-              console.log(`   🌐 Cabin: http://localhost:8888/live/1/${imei}`);
-            } else {
-              const streamIndex = cameraMode === 'OUT' ? '0' : '1';
-              const camName = cameraMode === 'OUT' ? 'Front' : 'Cabin';
-              console.log(`📺 Device will push to: ${cleanUrl}/${streamIndex}/${imei}`);
-              console.log(`👁️  Watch ${camName} camera at: http://localhost:8888/live/${streamIndex}/${imei}`);
+              console.log(`📺 Device should push to:`);
+              console.log(`   📹 Front: rtmp://${publicRtmpHost}:${publicRtmpPort}/live/0/${imei}`);
+              console.log(`   📹 Cabin: rtmp://${publicRtmpHost}:${publicRtmpPort}/live/1/${imei}`);
+              console.log(`\n👁️  Watch at:`);
+              console.log(`   🌐 Front: http://localhost:8888/live/0/${imei}/index.m3u8`);
+              console.log(`   🌐 Cabin: http://localhost:8888/live/1/${imei}/index.m3u8`);
             }
             
-            console.log(`\n⏳ Wait 5-10 seconds for device RTMP connection(s)`);
+            console.log(`\n⏳ Wait 10-15 seconds for RTMP connection`);
             console.log(`📊 Check MediaMTX logs for: [RTMP] [conn] opened`);
             console.log('═'.repeat(80) + '\n');
             

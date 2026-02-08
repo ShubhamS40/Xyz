@@ -1,19 +1,21 @@
 ###############################################
-# Global settings -> General
+# ✅ FIXED MediaMTX Configuration for JC261
+###############################################
+# Changes:
+# 1. ✅ Correct RTMP port: 1935 (was 1935, good!)
+# 2. ✅ Added path rules for channel-based streams
+# 3. ✅ HLS configuration optimized for playback
+# 4. ✅ Disabled unnecessary protocols
 ###############################################
 
 logLevel: info
 logDestinations: [stdout]
 logFile: mediamtx.log
 
-readTimeout: 20s
-writeTimeout: 20s
-writeQueueSize: 1024
+readTimeout: 30s
+writeTimeout: 30s
+writeQueueSize: 2048
 udpMaxPayloadSize: 1472
-
-runOnConnect:
-runOnConnectRestart: no
-runOnDisconnect:
 
 ###############################################
 # Authentication
@@ -39,24 +41,15 @@ authInternalUsers:
   - action: pprof
 
 ###############################################
-# RTSP
-###############################################
-
-rtsp: yes
-protocols: [udp, tcp]
-encryption: "no"
-rtspAddress: :8554
-
-###############################################
-# RTMP
+# ✅ RTMP (PRIMARY INPUT FROM DEVICE)
 ###############################################
 
 rtmp: yes
-rtmpAddress: :1935
+rtmpAddress: :1935  # ✅ CORRECT PORT
 rtmpEncryption: "no"
 
 ###############################################
-# 🔥 HLS (FIXED FOR iOS)
+# ✅ HLS (PRIMARY OUTPUT FOR PLAYBACK)
 ###############################################
 
 hls: yes
@@ -64,20 +57,20 @@ hlsAddress: :8888
 hlsEncryption: no
 hlsAllowOrigin: '*'
 
-# IMPORTANT FIXES 👇
+# ✅ PLAYBACK OPTIMIZATIONS
 hlsAlwaysRemux: yes
-hlsVariant: mpegts     # 🔥 iOS SAFE (NO lowLatency)
+hlsVariant: mpegts     # iOS compatible
 
 hlsSegmentCount: 7
-hlsSegmentDuration: 6s   # stable segments
-hlsPartDuration: 1s      # NO fluctuation
+hlsSegmentDuration: 4s # Faster startup for playback
+hlsPartDuration: 1s
 
 hlsSegmentMaxSize: 50M
 hlsDirectory: ''
-hlsMuxerCloseAfter: 120s
+hlsMuxerCloseAfter: 180s  # Keep alive longer for playback
 
 ###############################################
-# WebRTC (unchanged)
+# WebRTC (Optional - for browser playback)
 ###############################################
 
 webrtc: yes
@@ -85,18 +78,9 @@ webrtcAddress: :8889
 webrtcEncryption: no
 webrtcAllowOrigin: '*'
 webrtcLocalUDPAddress: :8189
-webrtcHandshakeTimeout: 10s
-webrtcTrackGatherTimeout: 2s
 
 ###############################################
-# SRT
-###############################################
-
-srt: yes
-srtAddress: :8890
-
-###############################################
-# Path defaults
+# ✅ PATH CONFIGURATION
 ###############################################
 
 pathDefaults:
@@ -104,10 +88,36 @@ pathDefaults:
   sourceOnDemand: no
   maxReaders: 0
   overridePublisher: yes
-
-###############################################
-# Paths
-###############################################
+  record: no  # Disable recording
 
 paths:
-  all_others:
+  # ✅ MATCH ALL LIVE STREAMS
+  ~^live/.*$:
+    source: publisher
+    sourceOnDemand: no
+    record: no
+
+  # ✅ MATCH PLAYBACK STREAMS
+  ~^playback/.*$:
+    source: publisher
+    sourceOnDemand: no
+    record: no
+
+
+  # Catch-all for anything else
+  all:
+    source: publisher
+
+
+###############################################
+# ✅ RTSP (REQUIRED FOR JC261 PLAYBACK)
+###############################################
+
+rtsp: yes
+rtspAddress: :8554
+
+###############################################
+# ✅ DISABLED PROTOCOLS (NOT NEEDED)
+###############################################
+
+srt: no

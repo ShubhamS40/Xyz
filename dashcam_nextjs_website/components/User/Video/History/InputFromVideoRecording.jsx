@@ -1,19 +1,25 @@
 import React, { useState } from "react";
-import { Select, DatePicker, Button, Space } from "antd";
-import { SearchOutlined } from "@ant-design/icons";
+import { Select, DatePicker, Button, Space, List, Tag, Spin } from "antd";
+import { SearchOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 
 const { Option } = Select;
 
-const InputFormVideoRecording = ({ devices = [], loading = false }) => {
+const InputFormVideoRecording = ({ 
+  devices = [], 
+  loading = false, 
+  onSearch, 
+  videoList = [], 
+  onPlay,
+  isSearching = false
+}) => {
   const [deviceId, setDeviceId] = useState(null);
   const [date, setDate] = useState(dayjs());
 
-  const handleSearch = () => {
-    console.log("Search clicked");
-    console.log("Device ID:", deviceId);
-    console.log("Date:", date?.format("YYYY-MM-DD"));
-    // TODO: Implement actual search functionality
+  const handleSearchClick = () => {
+    if (onSearch && deviceId && date) {
+      onSearch(deviceId, date);
+    }
   };
 
   const handleReset = () => {
@@ -22,7 +28,7 @@ const InputFormVideoRecording = ({ devices = [], loading = false }) => {
   };
 
   return (
-    <div style={{ width: "100%" }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>
       <Space direction="vertical" style={{ width: "100%" }} size="middle">
         {/* Device Dropdown */}
         <Select
@@ -61,8 +67,9 @@ const InputFormVideoRecording = ({ devices = [], loading = false }) => {
             type="primary"
             icon={<SearchOutlined />}
             style={{ flex: 1 }}
-            onClick={handleSearch}
-            disabled={!deviceId}
+            onClick={handleSearchClick}
+            disabled={!deviceId || isSearching}
+            loading={isSearching}
           >
             Search
           </Button>
@@ -72,6 +79,43 @@ const InputFormVideoRecording = ({ devices = [], loading = false }) => {
           </Button>
         </div>
       </Space>
+
+      {/* Video List */}
+      <div className="mt-6 flex-1 overflow-y-auto">
+        {isSearching ? (
+          <div className="flex justify-center py-8">
+            <Spin tip="Loading videos..." />
+          </div>
+        ) : (
+          <List
+            header={<div className="font-semibold text-gray-700">Available Videos ({videoList.length})</div>}
+            bordered
+            dataSource={videoList}
+            renderItem={(item) => (
+              <List.Item 
+                className="cursor-pointer hover:bg-gray-50 transition-colors"
+                onClick={() => onPlay && onPlay(item)}
+              >
+                <div className="flex flex-col w-full">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-medium text-gray-800">
+                      {dayjs(item.videoDate || item.recorded).format('HH:mm:ss')}
+                    </span>
+                    <Tag color={item.channel === 0 ? "blue" : "green"}>
+                      {item.cameraType || (item.channel === 0 ? "Front" : "Rear")}
+                    </Tag>
+                  </div>
+                  <div className="flex justify-between items-center text-xs text-gray-500">
+                    <span>{item.filename}</span>
+                    <PlayCircleOutlined className="text-lg text-blue-500" />
+                  </div>
+                </div>
+              </List.Item>
+            )}
+            locale={{ emptyText: 'No videos found' }}
+          />
+        )}
+      </div>
     </div>
   );
 };

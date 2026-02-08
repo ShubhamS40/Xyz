@@ -20,6 +20,13 @@ export default function VideoPage() {
   const [broadcastDuration, setBroadcastDuration] = useState('not limited');
   const prevLiveRef = useRef(false);
 
+  // History Playback State
+  const [historyVideoList, setHistoryVideoList] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [currentHistoryVideo, setCurrentHistoryVideo] = useState(null);
+  const [historyStreamUrl, setHistoryStreamUrl] = useState(null);
+  const [selectedHistoryDevice, setSelectedHistoryDevice] = useState(null);
+
   useEffect(() => {
     const loadDashcamDevices = async () => {
       try {
@@ -94,6 +101,67 @@ export default function VideoPage() {
     setSelectedStreams((prev) => prev.filter((s) => s.device.imei !== imei));
   };
 
+  // History Search Handler
+  const handleHistorySearch = async (imei, date) => {
+    try {
+      setHistoryLoading(true);
+      setHistoryVideoList([]);
+      setSelectedHistoryDevice(imei);
+
+      // Format date for JC261 (YYMMDDHHMMSS)
+      // Assuming date is a dayjs object or string YYYY-MM-DD
+      const dateObj = new Date(date);
+      const year = dateObj.getFullYear().toString().slice(-2);
+      const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+      const day = dateObj.getDate().toString().padStart(2, '0');
+      
+      const startTime = `${year}${month}${day}000000`;
+      const endTime = `${year}${month}${day}235959`;
+
+      // 1. Request list from device
+      await apiService.requestVideoList(imei, startTime, endTime);
+
+      // 2. Poll for results (max 10 attempts, 2s interval)
+      let attempts = 0;
+      const maxAttempts = 15;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        try {
+          const result = await apiService.getVideoList(imei);
+          if (result.success && result.videos && result.videos.length > 0) {
+            setHistoryVideoList(result.videos);
+            clearInterval(pollInterval);
+            setHistoryLoading(false);
+          } else if (attempts >= maxAttempts) {
+            clearInterval(pollInterval);
+            setHistoryLoading(false);
+            // Optional: Show "No videos found" toast
+          }
+        } catch (e) {
+          console.error("Polling error:", e);
+        }
+      }, 2000);
+
+    } catch (error) {
+      console.error("Search error:", error);
+      setHistoryLoading(false);
+    }
+  };
+
+  // History Play Handler
+  const handleHistoryPlay = async (video) => {
+    if (!selectedHistoryDevice) return;
+    try {
+      setCurrentHistoryVideo(video);
+      const response = await apiService.startPlayback(selectedHistoryDevice, video.filename);
+      if (response.success && response.hlsUrl) {
+        setHistoryStreamUrl(response.hlsUrl);
+      }
+    } catch (error) {
+      console.error("Play error:", error);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen bg-gray-50">
       <Navbar activeTab={activeTab} onTabChange={handleTabChange} />
@@ -144,10 +212,17 @@ export default function VideoPage() {
           {activeSidebarItem === 'history' && (
             <>
               <div className="w-80 border-r border-gray-200 overflow-y-auto bg-white p-6">
-                <InputFormVideoRecording devices={dashcamDevices} loading={loading} />
+                <InputFormVideoRecording 
+                  devices={dashcamDevices} 
+                  loading={loading}
+                  onSearch={handleHistorySearch}
+                  videoList={historyVideoList}
+                  onPlay={handleHistoryPlay}
+                  isSearching={historyLoading}
+                />
               </div>
               <div className="flex-1 overflow-y-auto bg-white p-6">
-                <VideoPlayer />
+                <VideoPlayer url={historyStreamUrl} />
               </div>
             </>
           )}

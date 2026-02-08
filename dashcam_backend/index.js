@@ -21,10 +21,21 @@ dotenv.config();
 
 // Function to start MediaMTX
 const startMediaMTX = () => {
-  const mediaMtxPath = path.join(__dirname, 'services', 'jc261', 'mediamtx', 'mediamtx.exe');
+  const isWindows = process.platform === 'win32';
+  const binaryName = isWindows ? 'mediamtx.exe' : 'mediamtx';
+  const mediaMtxPath = path.join(__dirname, 'services', 'jc261', 'mediamtx', binaryName);
   
   if (!fs.existsSync(mediaMtxPath)) {
     console.error(`❌ MediaMTX executable not found at: ${mediaMtxPath}`);
+    // Fallback: Check for the other extension just in case
+    const altName = isWindows ? 'mediamtx' : 'mediamtx.exe';
+    const altPath = path.join(__dirname, 'services', 'jc261', 'mediamtx', altName);
+    if (fs.existsSync(altPath)) {
+       console.log(`⚠️ Found alternative binary at: ${altPath}`);
+       // Use this one instead
+       // Recursive call with correct assumption not possible easily here, so just warn user to rename
+       console.log(`💡 Please rename it to ${binaryName} or update code.`);
+    }
     return;
   }
 

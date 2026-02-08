@@ -285,6 +285,58 @@ class ApiService {
     return response.json();
   }
 
+  // ==================== Playback APIs ====================
+
+  // Request video list from device
+  async requestVideoList(imei, startTime, endTime, useTFCard = true) {
+    const response = await fetch(`${API_URL}/api/playback/request-list/${imei}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ startTime, endTime, useTFCard }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to request video list');
+    }
+    return response.json();
+  }
+
+  // Get available video list (polled)
+  async getVideoList(imei) {
+    const response = await fetch(`${API_URL}/api/playback/videos/${imei}?parsed=true`);
+    if (!response.ok) {
+      throw new Error('Failed to get video list');
+    }
+    return response.json();
+  }
+
+  // Start playback
+  async startPlayback(imei, videoName, force = false) {
+    const response = await fetch(`${API_URL}/api/playback/start/${imei}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ videoName, force }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to start playback');
+    }
+    return response.json();
+  }
+
+  // Stop playback
+  async stopPlayback(imei) {
+    const response = await fetch(`${API_URL}/api/playback/stop/${imei}`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      throw new Error('Failed to stop playback');
+    }
+    return response.json();
+  }
+
   // Admin APIs
   async adminRegister(email, password) {
     const response = await fetch(`${API_URL}/api/admin/register`, {

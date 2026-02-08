@@ -270,8 +270,17 @@ router.get('/videos/:imei', async (req, res) => {
         endTime: session.endTime
       } : null,
       hint: videoList.length === 0 ? 
-        'No videos found. Try: (1) POST /request-list/:imei to request from device, (2) POST /upload-filelist/:imei to upload fileinfo.fjson manually' : 
+        'No videos found. Try POST /request-list/:imei to request from device.' : 
         null,
+      exampleRequest: videoList.length === 0 ? {
+        method: 'POST',
+        url: `/api/playback/request-list/${imei}`,
+        body: {
+          startTime: '260203000000',
+          endTime: '260203235959',
+          useTFCard: true
+        }
+      } : null,
       parsedDataAvailable: parsedList.length > 0,
       tip: parsedList.length > 0 ? 'Add ?parsed=true to get detailed video metadata' : null
     });
@@ -329,10 +338,20 @@ router.post('/request-list/:imei', async (req, res) => {
       });
     }
 
+    // ✅ FIX: Use dynamic host from request instead of hardcoded IP
+    // This ensures the device replies to THIS server
+    const protocol = req.protocol;
+    const host = req.get('host'); // Gets "IP:PORT" or domain
+    
+    // Use a unified callback endpoint that can handle both Lists and Files
+    const callbackUrl = `${protocol}://${host}/api/playback/callback/${imei}`;
+    
+    console.log(`\n📡 Configured Device Callback URL: ${callbackUrl}`);
+
     const activeConnections = tcpServer.activeConnections;
     const result = await playbackService.requestVideoList(
       imei,
-      'http://159.223.171.199:41379/api/playback/request-all/' + imei, // Use the new endpoint
+      callbackUrl,
       startTime,
       endTime,
       activeConnections,
@@ -348,6 +367,137 @@ router.post('/request-list/:imei', async (req, res) => {
       error: error.message
     });
   }
+});
+
+/**
+ * ✅ UNIFIED CALLBACK ENDPOINT (List & Video Uploads)
+ * POST /api/playback/callback/:imei
+ */
+router.post('/callback/:imei', upload.any(), async (req, res) => {
+  console.log('\n' + '🎯'.repeat(40));
+  console.log('🎯 HTTP POST RECEIVED AT /api/playback/callback/:imei');
+  console.log(`🎯 IMEI from URL: ${req.params.imei}`);
+  console.log(`🎯 Content-Type: ${req.headers['content-type']}`);
+  console.log(`🎯 Content-Length: ${req.headers['content-length']}`);
+  
+  try {
+    const { imei } = req.params;
+    const playbackService = req.app.get('playbackService');
+
+    if (!playbackService) return res.status(500).send('Service unavailable');
+
+    // CASE 1: File Upload (Video) via Multer (multipart/form-data)
+    if (req.files && req.files.length > 0) {
+      const file = req.files[0];
+      console.log(`📥 FILE UPLOAD DETECTED: ${file.originalname} (${file.size} bytes)`);
+      
+      const result = await playbackService.handleVideoFileUpload(imei, file.originalname, file.buffer);
+      
+      // ✅ FIX: Return protocol-compliant response (Section 6.1)
+      return res.json({
+        code: "0",
+        message: "success",
+        data: result
+      });
+    }
+    
+    // CASE 2: Video List (JSON or Text)
+    // Check for fileNameList in body
+    if (req.body.fileNameList) {
+      console.log('📥 VIDEO LIST DETECTED (fileNameList field)');
+      const result = playbackService.handleVideoListFromDevice(imei, req.body.fileNameList);
+      return res.json({ code: 0, ok: true });
+    }
+
+    // CASE 3: Debugging - Log if body exists but no files
+    if (req.body && Object.keys(req.body).length > 0) {
+       console.log('📥 BODY RECEIVED (No Files):', JSON.stringify(req.body).substring(0, 200));
+       // Some devices send video list as raw keys?
+       // If body has a key that looks like a file list...
+    } else {
+       console.log('⚠️  Request received but NO FILES and NO BODY detected.');
+       console.log('    Check Content-Type header. If it is application/octet-stream, Multer might need custom handling.');
+    }
+
+    return res.json({ code: 0, ok: true });
+
+  } catch (error) {
+    console.error('❌ Error in callback:', error);
+    return res.status(500).send(error.message);
+  }
+});
+
+/**
+ * ✅ VIDEO UPLOAD ENDPOINT (Explicit)
+ * POST /api/playback/video-upload
+ */
+router.post('/video-upload', upload.any(), async (req, res) => {
+  console.log('\n📥 POST /api/playback/video-upload received');
+  try {
+    // Try to find IMEI in body or headers
+    const imei = req.body.imei || req.headers['x-imei'];
+    
+    if (req.files && req.files.length > 0) {
+      const file = req.files[0];
+      console.log(`📥 File: ${file.originalname}, IMEI: ${imei}`);
+      
+      const playbackService = req.app.get('playbackService');
+      // If IMEI is missing, try to extract from filename or use a default?
+      // Without IMEI we can't store it correctly.
+      // But maybe the device sends IMEI in body?
+      
+      let extractedImei = imei;
+      
+      // ✅ FIX: Extract IMEI from session if not provided in upload request
+      if (!extractedImei) {
+        // Try to find matching session by filename
+        const sessions = playbackService.playbackSessions;
+        for (let [sessionId, session] of sessions.entries()) {
+           if (session.currentVideo === file.originalname) {
+             console.log(`✅ Found IMEI from session: ${session.imei}`);
+             extractedImei = session.imei;
+             break;
+           }
+        }
+      }
+      
+      if (!extractedImei) {
+         console.warn('⚠️ IMEI missing in upload request! Saving to "unknown" folder.');
+      }
+      
+      const targetImei = extractedImei || 'unknown';
+      const result = await playbackService.handleVideoFileUpload(targetImei, file.originalname, file.buffer);
+      
+      // ✅ FIX: Return protocol-compliant response (Section 6.1)
+      return res.json({
+        code: "0",
+        message: "success",
+        data: result
+      });
+    }
+    
+    return res.status(400).send('No file uploaded');
+  } catch (e) {
+    console.error('Upload error:', e);
+    return res.status(500).send(e.message);
+  }
+});
+
+/**
+ * ✅ STREAM/DOWNLOAD VIDEO
+ * GET /api/playback/video/:imei/:filename
+ */
+router.get('/video/:imei/:filename', (req, res) => {
+  const { imei, filename } = req.params;
+  const playbackService = req.app.get('playbackService');
+  
+  const video = playbackService.getVideoFile(imei, filename);
+  
+  if (!video) {
+    return res.status(404).send('Video not found or not uploaded yet');
+  }
+  
+  res.download(video.filepath, filename);
 });
 
 /**
@@ -435,10 +585,11 @@ function formatJC261Time(date) {
 router.post('/start/:imei', async (req, res) => {
   try {
     const { imei } = req.params;
-    const { videoName, force = false } = req.body;
+    const { videoName, protocol = 'rtsp', force = false } = req.body;
     
     console.log(`\n🔍 POST /start/${imei} received`);
     console.log(`   videoName: ${videoName}`);
+    console.log(`   protocol: ${protocol}`);
     console.log(`   force: ${force}`);
     
     if (!videoName) {
@@ -462,6 +613,7 @@ router.post('/start/:imei', async (req, res) => {
       imei,
       videoName,
       tcpServer.activeConnections,
+      protocol,
       force
     );
     
